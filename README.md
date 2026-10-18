@@ -15,12 +15,12 @@ El nombre viene del [acueducto de Segovia](https://es.wikipedia.org/wiki/Acueduc
 Cuando pegas un enlace compartido de OneDrive en Discord, sale una tarjeta genérica de Microsoft. Al abrirlo, una página de OneDrive con su propio visor. El archivo original está ahí, pero no hay ningún enlace estable que lleve a él:
 
 ```
-           1drv.ms/v/c/…                    Segovia
-   ┌──────────────────────────┐   ┌──────────────────────────┐
-   │ 🟦 Microsoft OneDrive     │   │ ▶  el vídeo, en el chat  │
-   │ "Echa un vistazo a…"      │   │    con su miniatura      │
-   └──────────────────────────┘   └──────────────────────────┘
-     una tarjeta y una web           el archivo original
+          1drv.ms/v/c/...                    Segovia
+  ┌──────────────────────────┐   ┌──────────────────────────┐
+  │ Microsoft OneDrive       │   │ > el vídeo, en el chat   │
+  │ "Echa un vistazo a..."   │   │   con su miniatura       │
+  └──────────────────────────┘   └──────────────────────────┘
+     una tarjeta y una web          el archivo original
 ```
 
 La URL directa al archivo existe, pero caduca en una hora. Guardarla no sirve, así que Segovia la pide a Microsoft en cada visita.
