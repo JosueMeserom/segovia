@@ -16,8 +16,17 @@ const { HOST = '127.0.0.1', PORT = '4040', PUBLIC_BASE_URL } = process.env;
 const STATIC = {
   '/': ['index.html', 'text/html; charset=utf-8'],
   '/enlace.js': ['enlace.js', 'text/javascript; charset=utf-8'],
+  '/subir.js': ['subir.js', 'text/javascript; charset=utf-8'],
 };
 for (const v of Object.values(STATIC)) v[0] = readFileSync(new URL('../landing/' + v[0], import.meta.url));
+
+// La subida solo aparece si hay app de Microsoft: su client ID (público, va al
+// navegador igualmente) y el relevo se meten en la landing al arrancar.
+const { ONEDRIVE_CLIENT_ID, RELAY_URL } = process.env;
+if (ONEDRIVE_CLIENT_ID) {
+  const config = JSON.stringify({ clientId: ONEDRIVE_CLIENT_ID, relay: RELAY_URL }).replace(/</g, '\\u003c');
+  STATIC['/'][0] = String(STATIC['/'][0]).replace('<script id="config" type="application/json">{}', '<script id="config" type="application/json">' + config);
+}
 
 createServer(async (req, res) => {
   // Detrás de Caddy llega por http: la URL pública (https) se toma de la config.

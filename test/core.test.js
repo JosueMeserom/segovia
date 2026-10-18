@@ -2,6 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { toPath, fromPath, esEmpresa } from '../landing/enlace.js';
 import { pickMode, kindOf, proxyHeaders, tempauthExp, isBot, handle } from '../src/core.js';
+import { relay, relayTarget } from '../src/relay.js';
+import { partes, nombreParte, esperado } from '../landing/subir.js';
 
 const CID = 'https://1drv.ms/v/c/8cf2e82e4f98b498/IQCpdMbCZGm7QbdveSe-zYVHAVZFVCCJrejuHQD7SRE58Z8';
 
@@ -86,4 +88,44 @@ test('Workers: proxy se manda a PROXY_BASE o se queda en redirect, sin llamar a 
 test('rutas que no son de Segovia y métodos raros', async () => {
   assert.equal((await handle(new Request('https://s.example/favicon.ico'))).status, 404);
   assert.equal((await handle(new Request('https://s.example/v/c/1a/abc', { method: 'POST' }))).status, 405);
+});
+
+test('enlace de «puede editar»: Segovia no lo sirve', async (t) => {
+  const real = globalThis.fetch;
+  t.after(() => (globalThis.fetch = real));
+  globalThis.fetch = async (url) => {
+    const u = String(url);
+    if (u.includes('/token')) return Response.json({ token: 't', expiryTimeUtc: new Date(Date.now() + 7 * 864e5).toISOString() });
+    if (u.endsWith('/permission')) return Response.json({ roles: ['write'] });
+    return Response.json({ name: 'a.7z', size: 1, file: { mimeType: 'application/x-7z-compressed' }, '@content.downloadUrl': 'https://x.example/d' });
+  };
+  const r = await handle(new Request('https://s.example/u/c/1a/editar'));
+  assert.equal(r.status, 403);
+  assert.match(await r.text(), /puede editar/);
+});
+
+test('relay: solo reenvía a sesiones de subida de OneDrive personal', async () => {
+  assert.ok(relayTarget('https://my.microsoftpersonalcontent.com/personal/abc/_api/v2.0/drive/items/x/uploadSession?guid=1'));
+  assert.ok(relayTarget('https://sn3302.up.1drv.com/up/abc'));
+  for (const v of [null, '', 'no', 'http://my.microsoftpersonalcontent.com/x', 'https://evil.example/my.microsoftpersonalcontent.com', 'https://my.microsoftpersonalcontent.com.evil.example/'])
+    assert.equal(relayTarget(v), null, v);
+  const env = { PROXY_BASE: 'https://casa.example/' };
+  const pre = await relay(new Request('https://w.example/relay', { method: 'OPTIONS' }), env);
+  assert.equal(pre.status, 204);
+  assert.equal(pre.headers.get('access-control-allow-origin'), 'https://casa.example');
+  const mal = await relay(new Request('https://w.example/relay', { method: 'PUT', headers: { 'x-upload-url': 'https://evil.example/' }, body: 'x' }), env);
+  assert.equal(mal.status, 400);
+});
+
+test('subida: partes, nombres y por dónde sigue', () => {
+  assert.deepEqual(partes(100), [[0, 100]]);
+  const p = partes(2 ** 31 + 5);
+  assert.equal(p.length, 6);
+  assert.equal(p[0][0], 0);
+  assert.equal(p.at(-1)[1], 2 ** 31 + 5);
+  for (let i = 1; i < p.length; i++) assert.equal(p[i][0], p[i - 1][1]);
+  assert.deepEqual(partes(10, 3, 5), [[0, 4], [4, 8], [8, 10]]);
+  assert.equal(nombreParte('fotos.7z', 0), 'fotos.7z.001');
+  assert.equal(nombreParte('fotos.7z', 11), 'fotos.7z.012');
+  assert.equal(esperado({ nextExpectedRanges: ['26214400-'] }), 26214400);
 });

@@ -6,6 +6,10 @@
 <title>Segovia</title>
 <meta name="description" content="Convierte enlaces compartidos de OneDrive en enlaces estables al archivo original, con embeds de vídeo, imagen y audio para Discord.">
 <meta name="theme-color" content="#14110f">
+<script>
+  // Vuelta del inicio de sesión de Microsoft en la ventana emergente: la lee y la cierra la pestaña principal.
+  if (window.opener && /[?&](code|error)=/.test(location.search)) document.documentElement.style.visibility = 'hidden';
+</script>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath fill='%23d9a25f' d='M2 6h28v4H2zM3 10h4v18H3zm11 0h4v18h-4zm11 0h4v18h-4zM7 10a3.5 5 0 0 1 7 0zm11 0a3.5 5 0 0 1 7 0z'/%3E%3C/svg%3E">
 <meta property="og:type" content="website">
 <meta property="og:title" content="Segovia">
@@ -26,6 +30,8 @@
     --suave: #b8ab9d;
     --tenue: #85786b;
     --sombra: 0 1px 2px rgba(0,0,0,.45), 0 14px 40px -14px rgba(0,0,0,.75);
+    --rojo: #e0786a;
+    color-scheme: dark;
   }
   @media (prefers-color-scheme: light) {
     :root {
@@ -41,10 +47,13 @@
       --suave: #5b4f44;
       --tenue: #8a7d70;
       --sombra: 0 1px 2px rgba(31,25,21,.06), 0 14px 32px -16px rgba(31,25,21,.25);
+      --rojo: #c0473a;
+      color-scheme: light;
     }
   }
 
   * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
   body {
     margin: 0;
     background: var(--fondo);
@@ -78,12 +87,12 @@
 
   /* ---- Conversor -------------------------------------------------------- */
   .conversor { position: relative; z-index: 1; margin: -3.5rem auto 0; max-width: 46rem; padding: 1.25rem; border-radius: 18px; background: var(--panel); border: 1px solid var(--linea); box-shadow: var(--sombra); }
-  .conversor input {
+  #enlace {
     width: 100%; padding: 1rem 1.1rem; border-radius: 12px;
     border: 1px solid var(--linea); background: var(--fondo2); color: var(--texto); font: inherit; font-size: 1rem;
   }
-  .conversor input::placeholder { color: var(--tenue); }
-  .conversor input:focus { outline: none; border-color: var(--piedra); box-shadow: 0 0 0 4px color-mix(in srgb, var(--piedra) 20%, transparent); }
+  #enlace::placeholder { color: var(--tenue); }
+  #enlace:focus { outline: none; border-color: var(--piedra); box-shadow: 0 0 0 4px color-mix(in srgb, var(--piedra) 20%, transparent); }
   .modos { display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; margin-top: .9rem; font-size: .9rem; color: var(--tenue); }
   .modos label { cursor: pointer; }
   .modos input { position: absolute; opacity: 0; pointer-events: none; }
@@ -96,7 +105,134 @@
   .salida button { flex: none; padding: 0 1.2rem; border-radius: 12px; border: 0; cursor: pointer; background: var(--piedra); color: #1b1410; font: inherit; font-weight: 600; }
   .salida button.hecho { background: var(--agua); }
   .aviso { margin: .7rem 0 0; min-height: 1.4em; font-size: .92rem; color: var(--tenue); }
-  .aviso.error { color: #e0786a; }
+  .aviso.error { color: var(--rojo); }
+
+  /* ---- Pestañas (solo si la instancia tiene subida) ---------------------- */
+  .pestanas { display: none; gap: .3rem; padding: .3rem; margin-bottom: 1rem; border-radius: 13px; background: var(--fondo2); border: 1px solid var(--linea); }
+  .con-subida .pestanas { display: flex; }
+  .pestanas button {
+    flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: .5rem; padding: .6rem .8rem;
+    border: 0; border-radius: 10px; background: none; color: var(--suave); font: inherit; font-weight: 600; font-size: .95rem; cursor: pointer; transition: .15s;
+  }
+  .pestanas button:hover { color: var(--texto); }
+  .pestanas button[aria-selected="true"] { background: var(--panel); color: var(--texto); box-shadow: 0 1px 3px rgba(0,0,0,.25), inset 0 -2px 0 var(--piedra); }
+  .pestanas button:focus-visible { outline: 2px solid var(--cielo); outline-offset: 1px; }
+  .pestanas svg { width: 18px; height: 18px; flex: none; }
+  @media (max-width: 30rem) { .pestanas svg { display: none; } .pestanas button { font-size: .88rem; padding-inline: .4rem; } }
+  .solo-subida { display: none; }
+  .con-subida .solo-subida { display: block; }
+
+  /* ---- Subida ----------------------------------------------------------- */
+  .boton { display: inline-flex; align-items: center; gap: .55rem; padding: .8rem 1.4rem; border-radius: 12px; border: 0; cursor: pointer; background: var(--piedra); color: #1b1410; font: inherit; font-weight: 650; transition: .15s; }
+  .boton:hover { filter: brightness(1.08); transform: translateY(-1px); }
+  .boton-suave { white-space: nowrap; padding: .35rem .85rem; border-radius: 999px; border: 1px solid var(--linea); background: none; color: var(--suave); font: inherit; font-size: .85rem; cursor: pointer; transition: .15s; }
+  .boton-suave:hover { border-color: var(--piedra); color: var(--texto); }
+  .chip { padding: .38rem .85rem; border-radius: 999px; border: 1px solid var(--linea); background: var(--panel); color: var(--texto); font: inherit; font-size: .84rem; font-weight: 600; cursor: pointer; transition: .15s; white-space: nowrap; }
+  .chip:hover { border-color: var(--piedra); }
+  .chip.principal { background: var(--piedra); border-color: var(--piedra); color: #1b1410; }
+  .chip.peligro { color: var(--rojo); }
+  .chip.peligro:hover { border-color: var(--rojo); }
+  .chip.hecho { background: var(--agua); border-color: var(--agua); color: #0c1d1b; }
+  .chip.fallo { background: var(--rojo); border-color: var(--rojo); color: #1b1410; }
+  .chip.pensando { opacity: .6; cursor: progress; }
+  .nota { font-size: .85rem; color: var(--tenue); }
+  .nota.error { color: var(--rojo); margin: 0; }
+
+  .fuera { text-align: center; padding: 1.4rem .5rem .4rem; }
+  .fuera svg { width: 60px; height: 60px; color: var(--piedra); margin-bottom: .6rem; }
+  .fuera h3 { font-size: 1.3rem; margin-bottom: .6rem; }
+  .fuera p { color: var(--suave); max-width: 48ch; margin-inline: auto; }
+  .fuera .boton { margin: .4rem 0 1rem; }
+  .fuera .nota { max-width: 52ch; }
+
+  .cuenta { display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin-bottom: .9rem; font-size: .9rem; color: var(--suave); }
+  .cuenta span { display: inline-flex; align-items: center; gap: .55rem; min-width: 0; }
+  .cuenta span::before { content: ""; flex: none; width: .5rem; height: .5rem; border-radius: 50%; background: var(--agua); box-shadow: 0 0 0 3px color-mix(in srgb, var(--agua) 25%, transparent); }
+
+  .destino { border: 1px solid var(--linea); border-radius: 13px; background: var(--fondo2); overflow: hidden; }
+  .migas { display: flex; flex-wrap: wrap; align-items: center; gap: .15rem .3rem; padding: .6rem .8rem; border-bottom: 1px solid var(--linea); font-size: .9rem; }
+  .migas button { padding: .1rem .3rem; border: 0; border-radius: 6px; background: none; color: var(--cielo); font: inherit; cursor: pointer; }
+  .migas button:hover { background: var(--panel); }
+  .migas strong { padding: .1rem .3rem; }
+  .migas .sep { color: var(--tenue); }
+  .carpetas { list-style: none; margin: 0; padding: .35rem; max-height: 13.5rem; overflow-y: auto; display: grid; grid-template-columns: repeat(auto-fill, minmax(12rem, 1fr)); gap: .15rem; }
+  .carpetas button { width: 100%; display: flex; align-items: center; gap: .6rem; padding: .5rem .6rem; border: 0; border-radius: 8px; background: none; color: var(--texto); font: inherit; font-size: .92rem; text-align: left; cursor: pointer; }
+  .carpetas button:hover, .carpetas button:focus-visible { background: var(--panel); outline: none; }
+  .carpetas svg { flex: none; width: 20px; height: 20px; color: var(--piedra); }
+  .carpetas .compartida svg { color: var(--agua); }
+  .carpetas span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .carpetas .vacio { grid-column: 1 / -1; padding: .55rem .6rem; color: var(--tenue); font-size: .9rem; }
+  .carpetas .vacio.error { color: var(--rojo); }
+  .pie-destino { display: flex; align-items: center; gap: .5rem; padding: .5rem .8rem; border-top: 1px solid var(--linea); }
+  #form-nueva { display: flex; flex: 1; gap: .5rem; }
+  #form-nueva input { flex: 1; min-width: 0; padding: .4rem .7rem; border-radius: 8px; border: 1px solid var(--linea); background: var(--panel); color: var(--texto); font: inherit; font-size: .9rem; }
+  #form-nueva input:focus { outline: none; border-color: var(--piedra); }
+
+  .soltar {
+    position: relative; display: grid; justify-items: center; gap: .2rem; margin-top: 1rem; padding: 1.9rem 1rem 1.6rem; text-align: center; cursor: pointer;
+    border: 2px dashed color-mix(in srgb, var(--piedra) 45%, var(--linea)); border-radius: 16px; transition: .2s;
+    background: radial-gradient(ellipse 55% 90% at 50% 130%, color-mix(in srgb, var(--agua) 16%, transparent), transparent 70%);
+  }
+  .soltar:hover, .soltar.encima { border-color: var(--piedra); background-color: color-mix(in srgb, var(--piedra) 6%, transparent); }
+  .soltar.encima { transform: scale(1.012); }
+  .soltar:focus-within { outline: 2px solid var(--cielo); outline-offset: 3px; }
+  .soltar input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+  .soltar svg { width: 46px; height: 46px; color: var(--piedra); margin-bottom: .35rem; transition: transform .25s; }
+  .soltar:hover svg, .soltar.encima svg { transform: translateY(-4px); }
+  .soltar strong { font-size: 1.05rem; }
+  .soltar span { color: var(--suave); font-size: .92rem; }
+  .soltar small { margin-top: .35rem; color: var(--tenue); font-size: .82rem; }
+  .soltar.apagado { opacity: .45; cursor: not-allowed; }
+  .grupo { display: inline-flex; flex-wrap: wrap; align-items: center; gap: .4rem; margin-right: .5rem; }
+
+  /* El progreso total es el canal del acueducto: el agua avanza sobre los arcos. */
+  .acueducto { margin-top: 1.2rem; }
+  .velocimetro { display: flex; justify-content: space-between; align-items: baseline; gap: 1rem; margin-bottom: .45rem; font-variant-numeric: tabular-nums; }
+  .velocimetro strong { font-size: 1.7rem; letter-spacing: -.03em; color: var(--agua); }
+  .velocimetro span { font-size: .9rem; color: var(--suave); }
+  .canal { height: 14px; padding: 3px; border-radius: 4px 4px 0 0; background: color-mix(in srgb, var(--piedra2) 60%, var(--panel)); }
+  .agua {
+    width: 0; height: 100%; border-radius: 2px; transition: width .8s ease;
+    background: repeating-linear-gradient(-45deg, transparent 0, rgba(255,255,255,.28) 10px, transparent 20px), var(--agua);
+    animation: fluir 1.2s linear infinite;
+  }
+  @keyframes fluir { to { background-position: 28.28px 0; } }
+  .pilares {
+    height: 26px;
+    background: radial-gradient(ellipse 50% 88% at 50% 100%, var(--panel) 97%, transparent 100%) 0 0 / 40px 100% repeat-x, color-mix(in srgb, var(--piedra2) 60%, var(--panel));
+    mask-image: linear-gradient(#000 40%, transparent);
+  }
+  @media (prefers-reduced-motion: reduce) { .agua { animation: none; } }
+  .estado { margin: .7rem 0 0; min-height: 1.4em; font-size: .9rem; color: var(--suave); font-variant-numeric: tabular-nums; }
+  .lote { display: flex; flex-wrap: wrap; gap: .4rem; margin-top: .7rem; }
+
+  .cola { list-style: none; margin: .8rem 0 0; padding: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: .5rem; }
+  .fila { padding: .75rem .9rem; border-radius: 12px; background: var(--fondo2); border: 1px solid var(--linea); animation: aparecer .3s ease; }
+  @keyframes aparecer { from { opacity: 0; transform: translateY(4px); } }
+  .fila-cab { display: flex; align-items: center; gap: .7rem; }
+  .nombre-archivo { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; font-size: .95rem; }
+  .tam { color: var(--tenue); font-size: .85rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .quitar { flex: none; width: 1.8rem; height: 1.8rem; border: 0; border-radius: 50%; background: none; color: var(--tenue); font-size: 1.25rem; line-height: 1; cursor: pointer; }
+  .quitar:hover { background: var(--panel); color: var(--texto); }
+  .barra { height: 5px; margin: .55rem 0 .4rem; border-radius: 99px; background: var(--linea); overflow: hidden; }
+  .barra i { display: block; width: 0; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--piedra), var(--agua)); transition: width .8s ease; }
+  .info { font-size: .84rem; color: var(--suave); font-variant-numeric: tabular-nums; }
+  .fila[data-estado="cola"] .info { color: var(--tenue); }
+  .fila[data-estado="error"] .info { color: var(--rojo); }
+  .fila[data-estado="error"] .barra i { background: var(--rojo); }
+  .fila[data-estado="hecha"] .barra i { background: var(--agua); }
+  .fila[data-estado="hecha"] .info::before { content: "✓ "; color: var(--agua); font-weight: 700; }
+  .enlaces, .opciones { display: none; }
+  .fila[data-estado="hecha"] .enlaces { display: flex; }
+  .fila[data-estado="hecha"] .opciones { display: block; }
+  .enlaces { flex-wrap: wrap; align-items: center; gap: .35rem; margin-top: .65rem; }
+  .enlaces .etiqueta { margin-right: .15rem; font-size: .82rem; color: var(--tenue); }
+  .opciones { margin-top: .6rem; font-size: .85rem; }
+  .opciones summary { width: fit-content; color: var(--tenue); cursor: pointer; }
+  .opciones summary:hover { color: var(--suave); }
+  .opciones div { display: flex; flex-wrap: wrap; align-items: center; gap: .45rem; margin-top: .6rem; }
+  .opciones input { padding: .33rem .6rem; border-radius: 8px; border: 1px solid var(--linea); background: var(--panel); color: var(--texto); font: inherit; }
+  .opciones .nota { margin: .3rem 0 0; font-size: .8rem; }
 
   /* ---- Secciones -------------------------------------------------------- */
   section { padding: clamp(3rem, 8vw, 5rem) 0; }
@@ -136,7 +272,18 @@
 </header>
 
 <div class="envoltorio">
-  <form class="conversor" onsubmit="return false">
+  <div class="conversor">
+  <div class="pestanas" role="tablist" aria-label="Qué hacer">
+    <button type="button" role="tab" id="t-enlace" aria-controls="p-enlace" aria-selected="true">
+      <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/></svg>
+      Convertir un enlace
+    </button>
+    <button type="button" role="tab" id="t-subir" aria-controls="p-subir" aria-selected="false" tabindex="-1">
+      <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4m-5 5 5-5 5 5M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></svg>
+      Subir a OneDrive
+    </button>
+  </div>
+  <form id="p-enlace" role="tabpanel" aria-labelledby="t-enlace" onsubmit="return false">
     <input id="enlace" type="url" aria-label="Enlace de OneDrive" placeholder="https://1drv.ms/v/c/…" autocomplete="off" spellcheck="false" autofocus>
     <div class="modos" role="radiogroup" aria-label="Modo">
       Modo:
@@ -150,6 +297,56 @@
     </div>
     <p class="aviso" id="aviso">También vale cambiar <code>1drv.ms</code> por <code id="host"></code> a mano.</p>
   </form>
+
+  <div id="p-subir" role="tabpanel" aria-labelledby="t-subir" hidden>
+    <div class="fuera" id="fuera">
+      <svg viewBox="0 0 48 48" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M6 42V20a18 18 0 0 1 36 0v22M14 42V22a10 10 0 0 1 20 0v20"/><path d="M24 38V25m-5 5 5-5 5 5"/></svg>
+      <h3>Sube sin pasar por aquí</h3>
+      <p>Los archivos van de tu navegador a tu OneDrive: directos a Microsoft, o por Cloudflare si así va más rápido. Este servidor no ve ni tus archivos ni tu sesión.</p>
+      <button type="button" class="boton" id="entrar">Iniciar sesión con Microsoft</button>
+      <p class="nota">Microsoft dirá que Segovia es una app «sin comprobar»: es lo normal en una app personal. Solo pide acceso a tus archivos, y la sesión dura lo que esta pestaña.</p>
+      <p class="nota error" id="error-entrar" role="alert"></p>
+    </div>
+
+    <div id="dentro" hidden>
+      <div class="cuenta"><span id="quien">Conectado</span><button type="button" class="boton-suave" id="salir">Cerrar sesión</button></div>
+      <div class="destino">
+        <nav class="migas" id="migas" aria-label="Carpeta de destino"></nav>
+        <ul class="carpetas" id="carpetas"></ul>
+        <div class="pie-destino">
+          <button type="button" class="boton-suave" id="nueva">+ Carpeta nueva</button>
+          <form id="form-nueva" hidden>
+            <input id="nombre-nueva" aria-label="Nombre de la carpeta nueva" placeholder="Nombre de la carpeta" autocomplete="off">
+            <button class="chip principal">Crear</button>
+          </form>
+        </div>
+      </div>
+      <label class="soltar" id="soltar">
+        <input type="file" id="archivos" multiple>
+        <svg viewBox="0 0 48 48" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M6 42V20a18 18 0 0 1 36 0v22M14 42V22a10 10 0 0 1 20 0v20"/><path d="M24 38V25m-5 5 5-5 5 5"/></svg>
+        <strong>Arrastra aquí los archivos</strong>
+        <span>o pulsa para elegirlos</span>
+        <small id="a-donde"></small>
+      </label>
+      <div class="modos">
+        <span class="grupo" id="vias" role="radiogroup" aria-label="Vía">
+          Vía:
+          <label><input type="radio" name="via" value="auto" checked><span>Automática</span></label>
+          <label><input type="radio" name="via" value="directo"><span>Directa</span></label>
+          <label><input type="radio" name="via" value="relay"><span>Cloudflare</span></label>
+        </span>
+        <label title="Microsoft sube cada archivo trozo a trozo, en orden. Partido en 6, van a la vez."><input type="checkbox" id="trocear"><span>Trocear los de más de 1 GB</span></label>
+      </div>
+      <div class="acueducto" id="canal" hidden><div class="velocimetro"><strong id="vel">…</strong><span id="falta"></span></div><div class="canal"><div class="agua" id="agua"></div></div><div class="pilares"></div></div>
+      <p class="estado" id="estado" aria-live="polite"></p>
+      <div class="lote" id="lote" hidden>
+        <button type="button" class="chip principal" data-todos="segovia">Copiar todos · Segovia</button>
+        <button type="button" class="chip" data-todos="view">Copiar todos · 1drv puede ver</button>
+      </div>
+      <ul class="cola" id="cola"></ul>
+    </div>
+  </div>
+  </div>
 </div>
 
 <section>
@@ -178,6 +375,18 @@
   </div>
 </section>
 
+<section class="solo-subida">
+  <div class="envoltorio">
+    <h2>Subir a OneDrive</h2>
+    <p class="subtitulo">Para mandar archivos grandes a quien sea: los subes aquí y copias el enlace, el de Segovia o el de OneDrive.</p>
+    <div class="tarjetas">
+      <div class="tarjeta"><h3>Directo a Microsoft</h3><p>Inicias sesión con tu cuenta y los bytes van de tu navegador a OneDrive. La sesión vive solo en esta pestaña; <b>este servidor no la ve</b>.</p></div>
+      <div class="tarjeta"><h3>O por Cloudflare</h3><p>Hay horas en que la subida directa a Microsoft se arrastra. Antes de empezar se prueban las dos vías unos segundos y <b>se usa la más rápida</b>.</p></div>
+      <div class="tarjeta"><h3>Lo enorme, a trozos</h3><p>Microsoft sube cada archivo en orden, trozo a trozo. Si lo marcas, uno de más de 1 GB se parte en <b>6 piezas</b> (<code>.001</code>, <code>.002</code>…) que suben a la vez; 7-Zip las junta al abrir la primera.</p></div>
+    </div>
+  </div>
+</section>
+
 <section>
   <div class="envoltorio nombre">
     <h2>Por qué Segovia</h2>
@@ -190,10 +399,35 @@
   <div class="envoltorio">Código en <a href="https://github.com/JosueMeserom/segovia">GitHub</a> · solo OneDrive personal</div>
 </footer>
 
+<script id="config" type="application/json">{}</script>
+<script type="module" src="/subir.js"></script>
 <script type="module">
   import { toPath, esEmpresa } from '/enlace.js';
 
   const $ = (id) => document.getElementById(id);
+
+  // Pestañas: la última elegida se recuerda.
+  const pestañas = [$('t-enlace'), $('t-subir')];
+  function pestaña(elegida) {
+    for (const b of pestañas) {
+      const sí = b === elegida;
+      b.setAttribute('aria-selected', sí);
+      b.tabIndex = sí ? 0 : -1;
+      $(b.getAttribute('aria-controls')).hidden = !sí;
+    }
+    try { localStorage.setItem('segovia:pestaña', elegida.id); } catch {}
+  }
+  pestañas.forEach((b, i) => {
+    b.onclick = () => pestaña(b);
+    b.onkeydown = (e) => {
+      if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+      pestaña(pestañas[1 - i]);
+      pestañas[1 - i].focus();
+    };
+  });
+  try {
+    if (document.documentElement.classList.contains('con-subida') && localStorage.getItem('segovia:pestaña') === 't-subir') pestaña($('t-subir'));
+  } catch {}
   const AVISO = $('aviso').innerHTML;
   $('host').textContent = location.host;
 

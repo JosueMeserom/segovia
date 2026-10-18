@@ -85,12 +85,8 @@ async function badgerToken(force) {
 
 const items = new Map(); // enlace → { item, exp }
 
-/** Datos del archivo y su URL directa, de la caché si aún no está cerca de caducar. */
-export async function resolve(link, fresh = false) {
-  const hit = items.get(link);
-  if (!fresh && hit && hit.exp > Date.now()) return hit.item;
-
-  const url = `${SHARES}u!${b64url(link)}/driveitem?$expand=thumbnails`;
+async function share(link, path) {
+  const url = `${SHARES}u!${b64url(link)}/${path}`;
   let r;
   for (let i = 0; i < 2; i++) {
     // `Prefer: autoredeem` es obligatorio la primera vez que un token abre un
@@ -100,7 +96,19 @@ export async function resolve(link, fresh = false) {
   }
   if (r.status === 403 || r.status === 404) throw new HttpError(404, 'El enlace no existe o ya no está compartido.');
   if (!r.ok) throw new HttpError(502, `Microsoft responde ${r.status}.`);
-  const d = await r.json();
+  return r.json();
+}
+
+/** Datos del archivo y su URL directa, de la caché si aún no está cerca de caducar. */
+export async function resolve(link, fresh = false) {
+  const hit = items.get(link);
+  if (!fresh && hit && hit.exp > Date.now()) return hit.item;
+
+  const [d, perm] = await Promise.all([share(link, 'driveitem?$expand=thumbnails'), share(link, 'permission')]);
+  // La ruta de Segovia ES el enlace: uno de «puede editar» daría permiso de
+  // escritura a cualquiera que viera el enlace de Segovia.
+  if (perm.roles?.includes('write'))
+    throw new HttpError(403, 'Es un enlace de «puede editar»: con él cualquiera podría cambiar el archivo. Comparte uno de «puede ver».');
   if (d.folder) throw new HttpError(415, 'Es una carpeta: Segovia solo sirve archivos.');
 
   const item = {

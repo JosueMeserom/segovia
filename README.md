@@ -6,6 +6,8 @@
 
 Convierte enlaces compartidos de OneDrive en **enlaces estables al archivo original**: el vídeo se reproduce dentro de Discord, la imagen se ve entera y lo demás se descarga directamente, sin pasar por la web de Microsoft.
 
+Y al revés: **sube archivos a tu OneDrive desde la portada**, mucho más rápido que la web de Microsoft, y te da el enlace para compartirlos.
+
 El nombre viene del [acueducto de Segovia](https://es.wikipedia.org/wiki/Acueducto_de_Segovia): casi dos mil años llevando agua de la sierra a la ciudad, piedra sobre piedra y sin argamasa. Segovia lleva tus archivos desde OneDrive hasta Discord o el navegador, sin quedarse con nada por el camino. Es hermano de [Bayeux](https://github.com/JosueMeserom/bayeux), que cose las imágenes de los posts de X como el tapiz.
 
 ---
@@ -73,6 +75,51 @@ En proxy, cada petición con `Range` usa la URL directa que haya en caché. Si M
 | `/{tipo}/c/{cid}/{id}`, `/{tipo}/s!{id}`, `/u/{base64url}` | Página con meta etiquetas y reproductor, o el archivo si no es multimedia y no es un bot |
 | `/raw/…` | El archivo, en el modo que toque |
 | `/thumb/…` | `302` a la miniatura de 800 px que genera Microsoft. Es el `og:image` de los vídeos, así no se queda caducado en el embed |
+| `/relay` | Solo en Workers: el relevo de las subidas (ver más abajo) |
+
+Los enlaces de **«puede editar»** se rechazan con un `403`. La ruta de Segovia es el propio enlace de OneDrive, así que uno de editar daría permiso de escritura a cualquiera que viera el de Segovia. Microsoft dice el tipo de enlace (`/permission` devuelve `read` o `write`), y Segovia lo comprueba al resolver.
+
+---
+
+## 📤 Subir a OneDrive
+
+Si la instancia tiene app de Microsoft (`ONEDRIVE_CLIENT_ID`), la portada muestra una pestaña **Subir a OneDrive**:
+
+- **Inicio de sesión en el navegador**, con OAuth y PKCE, sin secreto. Los tokens viven en el `sessionStorage` de la pestaña: el servidor no los ve nunca.
+- **Selector de carpeta**: tu OneDrive y las carpetas que otros comparten contigo (se sube al OneDrive de su dueño y gasta su espacio). Se recuerda la última.
+- **Varios archivos a la vez**, arrastrándolos o eligiéndolos, con progreso, velocidad y tiempo restante.
+- **Reanudar.** Un trozo que falla se reintenta preguntando a Microsoft por dónde iba. Si se cierra la pestaña, al volver a elegir el mismo archivo en la misma carpeta sigue donde se quedó (la sesión de subida dura unos días).
+- **Enlaces al terminar**: el de **Segovia**, el de OneDrive de **«puede ver»** o el de **«puede editar»**, y para varios archivos, todos de golpe. Opcionalmente, caducidad o contraseña.
+
+### Por qué es más rápido
+
+Medido en la misma línea (fibra simétrica de 1 Gbps):
+
+| Cómo | Velocidad |
+|---|---|
+| Web de OneDrive | ~1,5 MB/s |
+| Sesiones de subida de Graph, un archivo | 20–32 MB/s de madrugada, 0,2–0,5 MB/s por la tarde |
+| Lo mismo, 8 archivos a la vez | 60 MB/s de madrugada |
+| Pasando por un Worker de Cloudflare | 58 MB/s de madrugada, 10–32 MB/s por la tarde |
+| Lo mismo, 6 archivos a la vez, por la tarde | 15,7 MB/s (frente a 13,2 con uno solo, a la misma hora) |
+
+De ahí salen las tres decisiones:
+
+1. **Trozos grandes y varios archivos en paralelo** (6). Microsoft solo admite los trozos de un mismo archivo en orden, así que lo que va en paralelo son archivos.
+2. **Los archivos de más de 1 GB se pueden trocear** (opcional) en 6 partes, `nombre.001`, `nombre.002`… que suben a la vez. Quien lo descarga abre la `.001` con 7-Zip y lo junta; si el original era `algo.7z`, se extrae directamente como un 7z multivolumen.
+3. **El relevo de Cloudflare.** La subida directa a Microsoft desde algunas casas se arrastra a ciertas horas, y la misma subida pasando por Cloudflare no. Antes de empezar, la portada lanza una carrera de unos segundos entre las dos vías y usa la ganadora. El relevo (`/relay` en el Worker) solo reenvía trozos a sesiones de subida de OneDrive personal; la URL de la sesión ya lleva su permiso, así que tampoco ve ningún token. Si falla (por ejemplo, por el cupo diario de Workers), se sigue directo.
+
+### Registrar la app de Microsoft
+
+Hace falta un directorio de Entra: con una cuenta personal sin directorio, el portal da `AADSTS16000`. Se consigue gratis creando una [cuenta gratuita de Azure](https://azure.microsoft.com/free), que pide tarjeta solo para verificar.
+
+1. En [entra.microsoft.com](https://entra.microsoft.com): **Aplicaciones → Registros de aplicaciones → Nuevo registro**.
+2. **Tipos de cuenta admitidos: Solo cuentas personales de Microsoft.**
+3. **Authentication**: «Agregar URI de redireccionamiento» → **Aplicación de página única (SPA)** → `https://tu-host/` (y `http://localhost:4040/` para desarrollo). Tiene que ser SPA, no «Web»: así el navegador puede canjear el código con PKCE.
+4. **Permisos de API → Microsoft Graph → Permisos delegados → `Files.ReadWrite.All`**. Con `Files.ReadWrite` no se llega a las carpetas compartidas contigo.
+5. Ningún secreto. Copia el **Id. de aplicación (cliente)** a `ONEDRIVE_CLIENT_ID` en el `.env`.
+
+Al iniciar sesión, Microsoft muestra la app como «sin comprobar». Verificar al editor exige una cuenta de partner de Microsoft, y para uso personal no compensa.
 
 ---
 
@@ -141,7 +188,9 @@ Sin `encode`: los vídeos ya van comprimidos y lo único que conseguiría es gas
 | `PORT` | `4040` | Puerto |
 | `PUBLIC_BASE_URL` | el `Host` de la petición, por `http` | URL pública, para las meta etiquetas |
 | `DEFAULT_MODE` | `redirect` | `redirect` o `proxy`, cuando el enlace no lleva `?m=` |
-| `PROXY_BASE` | — | Solo en Workers: adónde mandar las peticiones en modo proxy |
+| `PROXY_BASE` | — | Solo en Workers: adónde mandar las peticiones en modo proxy. También es el único origen al que el relevo responde por CORS |
+| `ONEDRIVE_CLIENT_ID` | — | El Id. de aplicación de Entra. Sin él no hay pestaña de subir. No es secreto: va al navegador |
+| `RELAY_URL` | — | La ruta `/relay` del Worker. Sin ella, todo se sube directo |
 
 ---
 
@@ -155,7 +204,7 @@ Las vías documentadas no sirven para enlaces anónimos: `api.onedrive.com` resp
 
 La URL directa funciona desde cualquier IP y sin cookies, admite `Range` (`206`) y lleva `Access-Control-Allow-Origin: *`.
 
-El código está en tres piezas: `src/core.js` (un manejador `Request → Response` con APIs web), `src/node.js` y `src/worker.js` (los adaptadores, de pocas líneas). La conversión de enlaces vive en `landing/enlace.js` porque la usan el servidor y la portada.
+El código está en pocas piezas: `src/core.js` (un manejador `Request → Response` con APIs web), `src/node.js` y `src/worker.js` (los adaptadores, de pocas líneas) y `src/relay.js` (el relevo de subidas). La conversión de enlaces vive en `landing/enlace.js` porque la usan el servidor y la portada; la subida entera, en `landing/subir.js`, en el navegador.
 
 ---
 
@@ -172,13 +221,17 @@ Sin vender humo:
 - **Discord descarga el vídeo por su cuenta** para el embed; los archivos muy grandes pueden quedarse en la miniatura.
 - **La caché es por proceso y en memoria.** En Workers, cada instancia aislada tiene la suya, así que la primera visita en cada una pregunta a Microsoft.
 - **El proxy no limita a nadie.** En una instancia pública, cualquiera puede gastar tu ancho de banda con enlaces de OneDrive ajenos.
+- **Un archivo grande sin trocear va por una sola conexión.** Es una limitación de las sesiones de subida de Microsoft: probado, un trozo fuera de orden da `416` y dos a la vez, `409`. Trocearlo es la única forma de paralelizarlo, y a cambio quien lo recibe necesita 7-Zip o similar para juntar las partes. Unir las partes en la nube tampoco compensa: copiar de OneDrive a OneDrive por un Worker es otra vez una sola conexión (11,7 MB/s medidos), así que subir y unir tarda más que subir el archivo entero por el relevo.
+- **El relevo gasta cupo de Workers**: una petición por trozo de 50 MiB, así que las 100 000 diarias del plan gratuito dan para unos 5 TB al día. CORS solo deja usarlo desde tu portada, pero fuera del navegador cualquiera podría mandarle trozos a sesiones de subida de OneDrive suyas.
+- **La caducidad cambia el enlace de «puede ver» de siempre.** Microsoft da uno solo por archivo, así que al ponerle fecha también caduca el de Segovia. Los enlaces con contraseña son aparte y Segovia no puede abrirlos.
+- **La sesión dura lo que la pestaña**, y Microsoft no renueva más allá de 24 horas sin volver a iniciar sesión. Las subidas en curso no dependen de ella: la URL de cada sesión de subida lleva su propio permiso.
 
 ---
 
 ## 📋 Pendiente
 
 - **OneDrive de empresa y SharePoint.**
-- **Subida rápida a OneDrive desde la portada.** Medido: la web de OneDrive sube a ~1,5 MB/s, y un cliente propio con sesiones de subida de Graph, trozos grandes y varios archivos a la vez llega a 60 MB/s en la misma línea.
+- **Descargar las partes juntas.** Ahora quien recibe un archivo troceado se baja cada parte y las junta con 7-Zip.
 
 ---
 
@@ -189,7 +242,7 @@ npm test     # node:test, sin dependencias
 npm start    # servidor local con el .env si existe
 ```
 
-Los tests cubren la conversión de enlaces en los dos sentidos, la elección del modo, las cabeceras del proxy, la detección del tipo de archivo, la lectura del `tempauth` y la redirección de Workers a la instancia propia.
+Los tests cubren la conversión de enlaces en los dos sentidos, la elección del modo, las cabeceras del proxy, la detección del tipo de archivo, la lectura del `tempauth`, la redirección de Workers a la instancia propia, el rechazo de enlaces de editar, qué acepta el relevo y cómo se trocean los archivos.
 
 En `tools/medir-subida.mjs` está el prototipo con el que se midió la subida.
 
