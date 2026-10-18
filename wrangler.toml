@@ -1,0 +1,11 @@
+name = "segovia"
+main = "src/worker.js"
+compatibility_date = "2026-10-01"
+
+# La landing: "/" y "/enlace.js". Todo lo demás llega al Worker.
+[assets]
+directory = "landing"
+
+[vars]
+# Adónde mandar las peticiones en modo proxy. Sin esto, se sirven en redirect.
+PROXY_BASE = "https://segovia.ultrak.dynu.net"

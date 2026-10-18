@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Segovia</title>
+<meta name="description" content="Convierte enlaces compartidos de OneDrive en enlaces estables al archivo original, con embeds de vídeo, imagen y audio para Discord.">
+<meta name="theme-color" content="#14110f">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath fill='%23d9a25f' d='M2 6h28v4H2zM3 10h4v18H3zm11 0h4v18h-4zm11 0h4v18h-4zM7 10a3.5 5 0 0 1 7 0zm11 0a3.5 5 0 0 1 7 0z'/%3E%3C/svg%3E">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Segovia">
+<meta property="og:description" content="Enlaces de OneDrive que llevan al archivo original, con embeds para Discord.">
+<style>
+  /* ---- Paleta: granito al atardecer ------------------------------------- */
+  :root {
+    --piedra: #d9a25f;
+    --piedra2: #b9763f;
+    --cielo: #6fa8dc;
+    --agua: #4fb3a9;
+
+    --fondo: #14110f;
+    --fondo2: #1b1714;
+    --panel: #211c18;
+    --linea: #352d26;
+    --texto: #f3ede6;
+    --suave: #b8ab9d;
+    --tenue: #85786b;
+    --sombra: 0 1px 2px rgba(0,0,0,.45), 0 14px 40px -14px rgba(0,0,0,.75);
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --piedra: #a8662a;
+      --piedra2: #8a4f1c;
+      --cielo: #2f74b5;
+      --agua: #1f8a80;
+      --fondo: #faf6f1;
+      --fondo2: #f2ebe2;
+      --panel: #ffffff;
+      --linea: #e6dccf;
+      --texto: #1f1915;
+      --suave: #5b4f44;
+      --tenue: #8a7d70;
+      --sombra: 0 1px 2px rgba(31,25,21,.06), 0 14px 32px -16px rgba(31,25,21,.25);
+    }
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--fondo);
+    color: var(--texto);
+    font: 400 17px/1.65 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .envoltorio { width: min(100% - 2.5rem, 58rem); margin-inline: auto; }
+  h1, h2, h3 { line-height: 1.15; letter-spacing: -0.025em; margin: 0; }
+  p { margin: 0 0 1rem; }
+  a { color: var(--cielo); text-underline-offset: 3px; }
+  code { font: .9em ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background: var(--fondo2); border: 1px solid var(--linea); border-radius: 5px; padding: .05em .35em; }
+
+  /* ---- Cabecera con arcos ----------------------------------------------- */
+  header { position: relative; padding: clamp(3.5rem, 10vw, 6.5rem) 0 clamp(6rem, 14vw, 9rem); text-align: center; overflow: hidden; }
+  /* La fila de arcos del acueducto, dibujada con un degradado que se repite. */
+  .arcos {
+    position: absolute; left: 0; right: 0; bottom: 0; height: clamp(4rem, 10vw, 6.5rem);
+    background:
+      linear-gradient(var(--piedra2), var(--piedra2)) top / 100% 14% no-repeat,
+      radial-gradient(ellipse 50% 70% at 50% 100%, var(--fondo) 98%, transparent 100%) 0 14% / 72px 86% repeat-x,
+      var(--piedra2);
+    opacity: .2;
+    mask-image: linear-gradient(90deg, transparent, #000 15%, #000 85%, transparent);
+  }
+  .marca { display: inline-flex; align-items: center; gap: .7rem; margin-bottom: 1.8rem; font-weight: 700; font-size: 1.3rem; letter-spacing: -0.03em; }
+  .marca svg { width: 40px; height: 40px; }
+  h1 { font-size: clamp(2.3rem, 6.5vw, 3.8rem); max-width: 18ch; margin-inline: auto; text-wrap: balance; }
+  h1 em { font-style: normal; background: linear-gradient(100deg, var(--piedra), var(--agua)); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .entradilla { font-size: clamp(1.05rem, 2.2vw, 1.25rem); color: var(--suave); max-width: 54ch; margin: 1.3rem auto 0; text-wrap: pretty; }
+
+  /* ---- Conversor -------------------------------------------------------- */
+  .conversor { position: relative; z-index: 1; margin: -3.5rem auto 0; max-width: 46rem; padding: 1.25rem; border-radius: 18px; background: var(--panel); border: 1px solid var(--linea); box-shadow: var(--sombra); }
+  .conversor input {
+    width: 100%; padding: 1rem 1.1rem; border-radius: 12px;
+    border: 1px solid var(--linea); background: var(--fondo2); color: var(--texto); font: inherit; font-size: 1rem;
+  }
+  .conversor input::placeholder { color: var(--tenue); }
+  .conversor input:focus { outline: none; border-color: var(--piedra); box-shadow: 0 0 0 4px color-mix(in srgb, var(--piedra) 20%, transparent); }
+  .modos { display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; margin-top: .9rem; font-size: .9rem; color: var(--tenue); }
+  .modos label { cursor: pointer; }
+  .modos input { position: absolute; opacity: 0; pointer-events: none; }
+  .modos span { display: inline-block; padding: .3rem .75rem; border-radius: 999px; border: 1px solid var(--linea); color: var(--suave); transition: .15s; }
+  .modos input:checked + span { background: var(--piedra); border-color: var(--piedra); color: #1b1410; font-weight: 600; }
+  .modos input:focus-visible + span { outline: 2px solid var(--cielo); outline-offset: 2px; }
+  .salida { display: none; gap: .6rem; margin-top: .9rem; }
+  .salida.visible { display: flex; }
+  .salida output { flex: 1; min-width: 0; padding: .9rem 1rem; border-radius: 12px; background: var(--fondo2); border: 1px solid var(--linea); font: .9rem ui-monospace, Menlo, Consolas, monospace; overflow-x: auto; white-space: nowrap; }
+  .salida button { flex: none; padding: 0 1.2rem; border-radius: 12px; border: 0; cursor: pointer; background: var(--piedra); color: #1b1410; font: inherit; font-weight: 600; }
+  .salida button.hecho { background: var(--agua); }
+  .aviso { margin: .7rem 0 0; min-height: 1.4em; font-size: .92rem; color: var(--tenue); }
+  .aviso.error { color: #e0786a; }
+
+  /* ---- Secciones -------------------------------------------------------- */
+  section { padding: clamp(3rem, 8vw, 5rem) 0; }
+  section + section { border-top: 1px solid var(--linea); }
+  h2 { font-size: clamp(1.5rem, 4vw, 2.1rem); text-align: center; }
+  .subtitulo { color: var(--suave); text-align: center; max-width: 60ch; margin: .8rem auto 0; }
+  .tarjetas { display: grid; gap: 1rem; margin-top: 2.2rem; }
+  @media (min-width: 46rem) { .tarjetas { grid-template-columns: repeat(3, 1fr); } }
+  .tarjeta { padding: 1.3rem; border-radius: 14px; background: var(--panel); border: 1px solid var(--linea); }
+  .tarjeta h3 { font-size: 1.05rem; margin-bottom: .5rem; }
+  .tarjeta p { color: var(--suave); font-size: .95rem; margin: 0; }
+  .tarjeta b { color: var(--piedra); }
+
+  table { width: 100%; border-collapse: collapse; margin-top: 2rem; font-size: .95rem; }
+  th, td { text-align: left; padding: .75rem .9rem; border-bottom: 1px solid var(--linea); vertical-align: top; }
+  th { color: var(--tenue); font-weight: 600; font-size: .82rem; text-transform: uppercase; letter-spacing: .06em; }
+  td:first-child { white-space: nowrap; font-weight: 600; }
+  .tabla { overflow-x: auto; }
+
+  .nombre { max-width: 44rem; margin-inline: auto; color: var(--suave); }
+  .nombre p:first-of-type { margin-top: 1.5rem; }
+  footer { padding: 2.5rem 0 3rem; border-top: 1px solid var(--linea); text-align: center; color: var(--tenue); font-size: .9rem; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="envoltorio">
+    <div class="marca">
+      <svg viewBox="0 0 32 32" aria-hidden="true"><path fill="var(--piedra)" d="M2 6h28v4H2zM3 10h4v18H3zm11 0h4v18h-4zm11 0h4v18h-4zM7 10a3.5 5 0 0 1 7 0zm11 0a3.5 5 0 0 1 7 0z"/></svg>
+      Segovia
+    </div>
+    <h1>Tus archivos de OneDrive, <em>tal cual</em>, donde los pegues</h1>
+    <p class="entradilla">Pega un enlace compartido de OneDrive y Segovia te da otro que lleva al archivo original: el vídeo se reproduce en Discord, la imagen se ve entera y lo demás se descarga sin pasar por la web de Microsoft.</p>
+  </div>
+  <div class="arcos" aria-hidden="true"></div>
+</header>
+
+<div class="envoltorio">
+  <form class="conversor" onsubmit="return false">
+    <input id="enlace" type="url" aria-label="Enlace de OneDrive" placeholder="https://1drv.ms/v/c/…" autocomplete="off" spellcheck="false" autofocus>
+    <div class="modos" role="radiogroup" aria-label="Modo">
+      Modo:
+      <label><input type="radio" name="modo" value="" checked><span>El de la instancia</span></label>
+      <label><input type="radio" name="modo" value="redirect"><span>Redirect</span></label>
+      <label><input type="radio" name="modo" value="proxy"><span>Proxy</span></label>
+    </div>
+    <div class="salida" id="salida">
+      <output id="resultado"></output>
+      <button type="button" id="copiar">Copiar</button>
+    </div>
+    <p class="aviso" id="aviso">También vale cambiar <code>1drv.ms</code> por <code id="host"></code> a mano.</p>
+  </form>
+</div>
+
+<section>
+  <div class="envoltorio">
+    <h2>Qué recibe cada uno</h2>
+    <p class="subtitulo">El mismo enlace se adapta a quien lo abre. Nada se guarda: cada visita pregunta a Microsoft, y la respuesta se recuerda unos minutos.</p>
+    <div class="tarjetas">
+      <div class="tarjeta"><h3>Discord y otros bots</h3><p>Las meta etiquetas del archivo: <b>og:video</b> con miniatura, <b>og:image</b> o <b>og:audio</b>. El vídeo se reproduce dentro del chat.</p></div>
+      <div class="tarjeta"><h3>Una persona</h3><p>Un reproductor mínimo para vídeo y audio, la imagen sola, o la <b>descarga directa</b> si es cualquier otra cosa.</p></div>
+      <div class="tarjeta"><h3>/raw/…</h3><p>Siempre el archivo, sin página. Pon <code>/raw</code> delante de la ruta para usarlo en un <code>&lt;video&gt;</code>, un reproductor o un script.</p></div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="envoltorio">
+    <h2>Dos modos</h2>
+    <p class="subtitulo">Se elige por enlace con <code>?m=</code>. Si no lo lleva, manda el de la instancia.</p>
+    <div class="tabla">
+      <table>
+        <tr><th>Modo</th><th>Cómo</th><th>Para qué</th></tr>
+        <tr><td>Redirect</td><td>Un <code>302</code> a la URL directa de Microsoft. Los bytes van de Microsoft a quien mira.</td><td>Lo normal. No gasta nada del servidor. Microsoft lo sirve como descarga, y esa URL caduca en una hora.</td></tr>
+        <tr><td>Proxy</td><td>Los bytes pasan por este servidor, con saltos (<code>Range</code>) y como <code>inline</code>.</td><td>Cuando algo se empeña en descargar en vez de reproducir, o para saltar en vídeos largos pasada la hora. Solo en la instancia propia, no en Workers.</td></tr>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="envoltorio nombre">
+    <h2>Por qué Segovia</h2>
+    <p>Por su <a href="https://es.wikipedia.org/wiki/Acueducto_de_Segovia">acueducto</a>: casi dos mil años llevando agua de la sierra a la ciudad sin una gota de argamasa, piedra sobre piedra. Segovia hace lo mismo con tus archivos: los lleva desde OneDrive hasta Discord o el navegador, sin quedarse con nada por el camino.</p>
+    <p>Es hermano de <a href="https://github.com/JosueMeserom/bayeux">Bayeux</a>, que cose las imágenes de los posts de X en una sola tira, como el tapiz.</p>
+  </div>
+</section>
+
+<footer>
+  <div class="envoltorio">Código en <a href="https://github.com/JosueMeserom/segovia">GitHub</a> · solo OneDrive personal</div>
+</footer>
+
+<script type="module">
+  import { toPath, esEmpresa } from '/enlace.js';
+
+  const $ = (id) => document.getElementById(id);
+  const AVISO = $('aviso').innerHTML;
+  $('host').textContent = location.host;
+
+  function convertir() {
+    const texto = $('enlace').value.trim();
+    const modo = document.querySelector('input[name=modo]:checked').value;
+    const path = texto && toPath(texto);
+    $('salida').classList.toggle('visible', !!path);
+    $('aviso').classList.toggle('error', !!texto && !path);
+    if (path) {
+      $('resultado').value = location.origin + path + (modo ? '?m=' + modo : '');
+      $('aviso').textContent = 'Pégalo donde quieras. En Discord, el embed tarda unos segundos la primera vez.';
+    } else if (!texto) {
+      $('aviso').innerHTML = AVISO;
+      $('host').textContent = location.host;
+    } else {
+      let host = '';
+      try { host = new URL(texto).hostname; } catch {}
+      $('aviso').textContent = esEmpresa(host)
+        ? 'OneDrive de empresa y SharePoint aún no están soportados: solo OneDrive personal.'
+        : 'Eso no parece un enlace compartido de OneDrive (1drv.ms u onedrive.live.com).';
+    }
+  }
+
+  $('enlace').addEventListener('input', convertir);
+  document.querySelectorAll('input[name=modo]').forEach((r) => r.addEventListener('change', convertir));
+  $('copiar').addEventListener('click', async () => {
+    await navigator.clipboard.writeText($('resultado').value);
+    $('copiar').textContent = 'Copiado';
+    $('copiar').classList.add('hecho');
+    setTimeout(() => { $('copiar').textContent = 'Copiar'; $('copiar').classList.remove('hecho'); }, 1500);
+  });
+</script>
+</body>
+</html>

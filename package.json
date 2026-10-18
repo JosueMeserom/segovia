@@ -1,0 +1,13 @@
+{
+  "name": "segovia",
+  "version": "1.0.0",
+  "description": "Enlaces estables a los archivos originales de OneDrive, con embeds para Discord",
+  "type": "module",
+  "private": true,
+  "engines": { "node": ">=20.6" },
+  "scripts": {
+    "start": "node --env-file-if-exists=.env src/node.js",
+    "test": "node --test",
+    "deploy:worker": "npx wrangler@4 deploy"
+  }
+}
