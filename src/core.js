@@ -140,7 +140,13 @@ async function proxy(req, link, item) {
 
 function page(item, kind, url) {
   const self = url.origin + url.pathname + url.search;
-  const raw = url.origin + '/raw' + url.pathname + url.search;
+  // Los bots se bajan el archivo desde sus servidores: en redirect lo cogen
+  // directamente de Microsoft. Por el proxy pasaría por la subida de casa, y
+  // Discord abandona a los ~10 s; con el índice del MP4 al final necesita el
+  // archivo entero. El `attachment` del redirect no le importa.
+  const q = new URLSearchParams(url.search);
+  q.set('m', 'redirect');
+  const raw = `${url.origin}/raw${url.pathname}?${q}`;
   const thumb = url.origin + '/thumb' + url.pathname + url.search;
   const { width, height } = item.media;
 

@@ -59,6 +59,8 @@ Los enlaces del formato antiguo (`1drv.ms/x/s!…`) se convierten igual. Los de 
 | **Redirect** | Un `302` a la URL directa de Microsoft. Los bytes van de Microsoft a quien mira. | Lo normal. No gasta nada del servidor. |
 | **Proxy** | Los bytes pasan por el servidor, en streaming, reenviando `Range` e `If-Range`. Se devuelven `Content-Type`, `Content-Length`, `Content-Range`, `Accept-Ranges`, `ETag` y `Last-Modified`, y `Content-Disposition: attachment` pasa a `inline`. | Cuando algo se empeña en descargar en vez de reproducir, o para saltar en vídeos largos pasada la hora. |
 
+Las meta etiquetas para bots apuntan **siempre en redirect**, aunque el enlace lleve `?m=proxy`. Discord se baja el vídeo entero desde sus servidores antes de mostrarlo, porque muchos MP4 llevan el índice al final, y abandona a los ~10 segundos. Desde Microsoft le llega a tiempo; a través del proxy dependería de la subida del servidor. El `attachment` del redirect no le molesta. El modo elegido sí se respeta en el reproductor de la página y en `/raw`.
+
 En proxy, cada petición con `Range` usa la URL directa que haya en caché. Si Microsoft responde `401`/`403` porque acaba de caducar, se resuelve otra vez y se reintenta una sola vez. Si quien mira cierra el vídeo, se corta también la descarga a Microsoft.
 
 ---
