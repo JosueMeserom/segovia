@@ -235,6 +235,19 @@ Sin vender humo:
 
 ---
 
+## 🔒 Privacidad y condiciones
+
+Lo que hace Segovia con tus datos, sin letra pequeña:
+
+- **Al subir**, la sesión de Microsoft se hace en tu navegador y los tokens se quedan en el `sessionStorage` de la pestaña. Los archivos van del navegador a Microsoft, directos o por el relevo de Cloudflare, que reenvía los trozos sin guardarlos ni ver tu sesión. El servidor de Segovia no recibe ni tus archivos ni tus tokens.
+- **Al abrir un enlace**, el servidor pregunta a Microsoft por él y guarda la respuesta en memoria unos minutos. El registro de accesos de la instancia apunta la ruta (que contiene el enlace compartido), el código de respuesta y el navegador, para diagnosticar fallos.
+- **No hay cookies, cuentas, analítica ni publicidad.** El navegador solo guarda la última carpeta y pestaña elegidas, y las subidas a medias para poder reanudarlas.
+- El permiso que pide la app (`Files.ReadWrite.All`) sirve para listar carpetas, subir y crear enlaces, y solo se usa cuando tú lo pides. Puedes retirarlo cuando quieras en [account.live.com/consent/Manage](https://account.live.com/consent/Manage).
+
+Segovia se ofrece tal cual, sin garantías (licencia MIT), y no tiene relación con Microsoft. Eres responsable de lo que subas y compartas.
+
+---
+
 ## 🧪 Desarrollo
 
 ```bash
