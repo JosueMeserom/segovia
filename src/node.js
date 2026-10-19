@@ -25,7 +25,8 @@ for (const v of Object.values(STATIC)) v[0] = readFileSync(new URL('../landing/'
 const { ONEDRIVE_CLIENT_ID, RELAY_URL } = process.env;
 if (ONEDRIVE_CLIENT_ID) {
   const config = JSON.stringify({ clientId: ONEDRIVE_CLIENT_ID, relay: RELAY_URL }).replace(/</g, '\\u003c');
-  STATIC['/'][0] = String(STATIC['/'][0]).replace('<script id="config" type="application/json">{}', '<script id="config" type="application/json">' + config);
+  STATIC['/'][0] = String(STATIC['/'][0]).replace('<script id="config" type="application/json">{}', '<script id="config" type="application/json">' + config)
+    .replace('<html lang="es">', '<html lang="es" class="con-subida">');
 }
 
 createServer(async (req, res) => {

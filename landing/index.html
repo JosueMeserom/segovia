@@ -84,6 +84,15 @@
   h1 { font-size: clamp(2.3rem, 6.5vw, 3.8rem); max-width: 18ch; margin-inline: auto; text-wrap: balance; }
   h1 em { font-style: normal; background: linear-gradient(100deg, var(--piedra), var(--agua)); -webkit-background-clip: text; background-clip: text; color: transparent; }
   .entradilla { font-size: clamp(1.05rem, 2.2vw, 1.25rem); color: var(--suave); max-width: 54ch; margin: 1.3rem auto 0; text-wrap: pretty; }
+  /* Con subida, las dos caras del servicio lado a lado, en el orden de las pestañas. */
+  .con-subida .entradillas { display: grid; grid-template-columns: 1fr 1fr; gap: 2.5rem; max-width: 54rem; margin: 1.6rem auto 0; text-align: left; }
+  .con-subida .entradilla { margin: 0; max-width: none; font-size: clamp(1rem, 1.8vw, 1.1rem); }
+  .con-subida .entradilla + .entradilla { padding-left: 1.25rem; margin-left: -1.25rem; border-left: 1px solid var(--linea); }
+  .con-subida .entradilla b { display: block; margin-bottom: .35rem; font-size: .78rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--piedra); }
+  @media (max-width: 40rem) {
+    .con-subida .entradillas { grid-template-columns: 1fr; gap: 1.2rem; }
+    .con-subida .entradilla + .entradilla { padding: 1.2rem 0 0; margin: 0; border-left: 0; border-top: 1px solid var(--linea); }
+  }
 
   /* ---- Conversor -------------------------------------------------------- */
   .conversor { position: relative; z-index: 1; margin: -3.5rem auto 0; max-width: 46rem; padding: 1.25rem; border-radius: 18px; background: var(--panel); border: 1px solid var(--linea); box-shadow: var(--sombra); }
@@ -266,7 +275,10 @@
       Segovia
     </div>
     <h1>Tus archivos de OneDrive, <em>tal cual</em>, donde los pegues</h1>
-    <p class="entradilla">Pega un enlace compartido de OneDrive y Segovia te da otro que lleva al archivo original: el vídeo se reproduce en Discord, la imagen se ve entera y lo demás se descarga sin pasar por la web de Microsoft.</p>
+    <div class="entradillas">
+      <p class="entradilla"><b class="solo-subida">Convertir un enlace</b>Pega un enlace compartido de OneDrive y Segovia te da otro que lleva al archivo original: el vídeo se reproduce en Discord, la imagen se ve entera y lo demás se descarga sin pasar por la web de Microsoft.</p>
+      <p class="entradilla solo-subida"><b>Subir a OneDrive</b>Arrastra tus archivos y Segovia los sube a tu OneDrive, o a una carpeta que te hayan compartido, mucho más rápido que la web de Microsoft. Si se corta, sigue por donde iba, y al acabar te da el enlace listo para pasárselo a quien quieras.</p>
+    </div>
   </div>
   <div class="arcos" aria-hidden="true"></div>
 </header>
