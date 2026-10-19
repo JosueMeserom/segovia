@@ -296,7 +296,7 @@
     </button>
   </div>
   <form id="p-enlace" role="tabpanel" aria-labelledby="t-enlace" onsubmit="return false">
-    <input id="enlace" type="url" aria-label="Enlace de OneDrive" placeholder="https://1drv.ms/v/c/…" autocomplete="off" spellcheck="false" autofocus>
+    <input id="enlace" type="url" aria-label="Enlace de OneDrive" placeholder="https://1drv.ms/v/c/…" autocomplete="off" spellcheck="false">
     <div class="modos" role="radiogroup" aria-label="Modo">
       Modo:
       <label><input type="radio" name="modo" value="" checked><span>El de la instancia</span></label>
@@ -417,6 +417,9 @@
   import { toPath, esEmpresa } from '/enlace.js';
 
   const $ = (id) => document.getElementById(id);
+
+  // Con ratón, la caja lista para pegar; en el móvil no, que bajaría la página y sacaría el teclado.
+  if (matchMedia('(pointer: fine)').matches) $('enlace').focus({ preventScroll: true });
 
   // Pestañas: la última elegida se recuerda.
   const pestañas = [$('t-enlace'), $('t-subir')];
