@@ -57,7 +57,7 @@ export function tempauthExp(downloadUrl) {
   }
 }
 
-class HttpError extends Error {
+export class HttpError extends Error {
   constructor(status, message) {
     super(message);
     this.status = status;

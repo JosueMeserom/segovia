@@ -8,6 +8,7 @@
   "scripts": {
     "start": "node --env-file-if-exists=.env src/node.js",
     "test": "node --test",
+    "segovia": "node --env-file-if-exists=.env tools/segovia.mjs",
     "deploy:worker": "npx wrangler@4 deploy"
   }
 }

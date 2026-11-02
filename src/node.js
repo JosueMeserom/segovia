@@ -10,6 +10,8 @@ import { createServer } from 'node:http';
 import { readFileSync } from 'node:fs';
 import { Readable } from 'node:stream';
 import { handle } from './core.js';
+import { api } from './api.js';
+import { leer, vigilar } from './graph.js';
 
 const { HOST = '127.0.0.1', PORT = '4040', PUBLIC_BASE_URL } = process.env;
 
@@ -42,19 +44,28 @@ createServer(async (req, res) => {
   const ac = new AbortController();
   res.on('close', () => ac.abort());
   const headers = {};
-  for (const k of ['user-agent', 'range', 'if-range']) if (req.headers[k]) headers[k] = req.headers[k];
+  for (const k of ['user-agent', 'range', 'if-range', 'authorization', 'content-type']) if (req.headers[k]) headers[k] = req.headers[k];
 
-  const r = await handle(new Request(url, { method: req.method, headers, signal: ac.signal }), process.env).catch((e) => {
+  const privada = /^\/(api|id)\//.test(url.pathname);
+  const init = { method: req.method, headers, signal: ac.signal };
+  if (privada && req.method !== 'GET' && req.method !== 'HEAD') Object.assign(init, { body: Readable.toWeb(req), duplex: 'half' });
+  const peticion = new Request(url, init);
+  const r = await (privada ? api(peticion) : handle(peticion, process.env)).catch((e) => {
     console.error(e);
     return new Response('Error interno.\n', { status: 500 });
   });
   res.on('close', () => {
     const ua = (req.headers['user-agent'] ?? '-').slice(0, 60);
-    console.log(`${req.method} ${url.pathname.slice(0, 40)}${url.search} ${r.status} ${req.headers.range ?? ''} ${res.writableFinished ? '' : 'cortada '}"${ua}"`);
+    // La firma de /id/ abre el archivo: no se escribe en el registro.
+    const ruta = url.pathname.replace(/^(\/id\/[^/]+).*/, '$1').slice(0, 60);
+    console.log(`${req.method} ${ruta}${url.search} ${r.status} ${req.headers.range ?? ''} ${res.writableFinished ? '' : 'cortada '}"${ua}"`);
   });
   res.writeHead(r.status, Object.fromEntries(r.headers));
   if (!r.body || req.method === 'HEAD') return res.end();
   Readable.fromWeb(r.body)
     .on('error', () => res.destroy())
     .pipe(res);
-}).listen(Number(PORT), HOST, () => console.log(`Segovia en http://${HOST}:${PORT}`));
+}).listen(Number(PORT), HOST, () => {
+  console.log(`Segovia en http://${HOST}:${PORT}`);
+  if (leer('sesion.json')) vigilar();
+});

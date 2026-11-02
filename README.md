@@ -86,7 +86,7 @@ Los enlaces de **«puede editar»** se rechazan con un `403`. La ruta de Segovia
 Si la instancia tiene app de Microsoft (`ONEDRIVE_CLIENT_ID`), la portada muestra una pestaña **Subir a OneDrive**:
 
 - **Inicio de sesión en el navegador**, con OAuth y PKCE, sin secreto. Los tokens viven en el `sessionStorage` de la pestaña: el servidor no los ve nunca.
-- **Selector de carpeta**: tu OneDrive y las carpetas que otros comparten contigo (se sube al OneDrive de su dueño y gasta su espacio). Se recuerda la última.
+- **Selector de carpeta**: tu OneDrive, tus accesos directos y lo compartido contigo (se sube al OneDrive de su dueño y gasta su espacio, así que cada carpeta compartida enseña cuánto le queda). Con **buscador**, que mira también dentro de lo compartido, y un campo para **pegar el enlace** de una carpeta. Se recuerda la última.
 - **Varios archivos a la vez**, arrastrándolos o eligiéndolos, con progreso, velocidad y tiempo restante.
 - **Reanudar.** Un trozo que falla se reintenta preguntando a Microsoft por dónde iba. Si se cierra la pestaña, al volver a elegir el mismo archivo en la misma carpeta sigue donde se quedó (la sesión de subida dura unos días).
 - **Enlaces al terminar**: el de **Segovia**, el de OneDrive de **«puede ver»** o el de **«puede editar»**, y para varios archivos, todos de golpe. Opcionalmente, caducidad o contraseña.
@@ -120,6 +120,49 @@ Hace falta un directorio de Entra: con una cuenta personal sin directorio, el po
 5. Ningún secreto. Copia el **Id. de aplicación (cliente)** a `ONEDRIVE_CLIENT_ID` en el `.env`.
 
 Al iniciar sesión, Microsoft muestra la app como «sin comprobar». Verificar al editor exige una cuenta de partner de Microsoft, y para uso personal no compensa.
+
+---
+
+## 🔑 Acceso por ID, para otros programas
+
+Opcional, y solo en una instancia propia. Da a otros programas tuyos (un addon, un script) acceso a **una carpeta** de tu OneDrive sin compartir nada con enlaces: listar, comprobar, crear sesiones de subida y servir archivos por ID con una URL estable. A diferencia de la pestaña de subir, aquí el servidor sí guarda una sesión de Microsoft, la de quien instala la instancia.
+
+**Instalación:**
+
+1. En la app de Entra del apartado anterior: **Authentication → Configuración → Permitir flujos de clientes públicos → Sí**.
+2. Inicia sesión con la cuenta que tiene acceso a la carpeta. Te pedirá que abras una web de Microsoft y escribas un código:
+   ```bash
+   npm run segovia login
+   ```
+3. Elige la carpeta y crea una clave por programa. Cada clave se enseña una sola vez:
+   ```bash
+   npm run segovia raiz "Mi carpeta/Sub"          # tuya, o un acceso directo a una compartida
+   npm run segovia raiz https://1drv.ms/f/…       # o con el enlace de la carpeta
+   npm run segovia clave addon                    # solo lee
+   npm run segovia -- clave script --escritura    # además puede subir
+   pm2 restart segovia
+   ```
+
+Se guarda en `~/.config/segovia/` (o `SEGOVIA_DIR`), fuera del repo y con permisos 600. El refresh token de Microsoft rota: se guarda de forma atómica en cada renovación y se renueva cada 12 horas aunque nadie use nada, y si falla, avisa con `AVISO_CMD`. `npm run segovia revocar addon` quita una clave al momento y `npm run segovia rotar-firma` invalida las URL ya repartidas.
+
+| Ruta | Qué hace |
+|---|---|
+| `GET /api/lista?ruta=…[&profundo=1]` | Carpetas y archivos, con su URL de reproducción firmada |
+| `GET /api/archivo?ruta=…` | Si existe, con su tamaño y descripción |
+| `PATCH /api/archivo` `{ruta, descripcion}` | Guarda un texto en la descripción del archivo. Usa `clave=valor;`: Microsoft escapa comillas y llaves |
+| `POST /api/subida` `{ruta, tamano, reemplazar?}` | La `uploadUrl` para subir por trozos; Segovia no toca los bytes. Crea las carpetas que falten, y avisa si no cabe o si ya existe |
+| `POST /api/pruebas/caducar` `{id?}` | Estropea la URL de descarga guardada, para probar la renovación sin esperar una hora |
+| `GET`/`HEAD /id/<id>/<firma>/<nombre>[?m=redirect]` | El archivo, sin clave: la firma vale para ese archivo y nada más |
+
+Las claves van en `Authorization: Bearer …`, y todas las rutas son relativas a la carpeta elegida: `..` no sale de ella.
+
+**El servido por ID va en proxy** salvo que pidas `?m=redirect`, y aguanta lo que un reproductor no sabría arreglar:
+
+- Si la URL de Microsoft caduca, pide otra y repite el mismo rango.
+- Si la conexión se corta o se queda sin datos, sigue desde el mismo byte.
+- **Elige servidor de Microsoft.** Desde una misma casa medimos 90 MB/s hacia unos y 0,5 hacia otros, y el DNS reparte con rachas de un minuto entero hacia los lentos. Cada instancia recuerda cuál le ha ido bien y evita el que le ha ido mal. Si esperando a Microsoft llegan menos de `PROXY_MIN_MBS`, cambia de conexión; un reproductor que lee despacio porque no necesita más no dispara nada.
+
+Nada de esto corre en el Worker, que no importa estos módulos: el token no sale del servidor.
 
 ---
 
@@ -191,6 +234,9 @@ Sin `encode`: los vídeos ya van comprimidos y lo único que conseguiría es gas
 | `PROXY_BASE` | — | Solo en Workers: adónde mandar las peticiones en modo proxy. También es el único origen al que el relevo responde por CORS |
 | `ONEDRIVE_CLIENT_ID` | — | El Id. de aplicación de Entra. Sin él no hay pestaña de subir. No es secreto: va al navegador |
 | `RELAY_URL` | — | La ruta `/relay` del Worker. Sin ella, todo se sube directo |
+| `SEGOVIA_DIR` | `~/.config/segovia` | Dónde se guardan la sesión y las claves del acceso por ID |
+| `AVISO_CMD` | — | Comando que recibe el aviso como último argumento si no se puede renovar la sesión. Sin él, va al registro |
+| `PROXY_MIN_MBS` | `10` | MB/s por debajo de los cuales el servido por ID prueba otra conexión. `0` lo apaga |
 
 ---
 
@@ -204,7 +250,7 @@ Las vías documentadas no sirven para enlaces anónimos: `api.onedrive.com` resp
 
 La URL directa funciona desde cualquier IP y sin cookies, admite `Range` (`206`) y lleva `Access-Control-Allow-Origin: *`.
 
-El código está en pocas piezas: `src/core.js` (un manejador `Request → Response` con APIs web), `src/node.js` y `src/worker.js` (los adaptadores, de pocas líneas) y `src/relay.js` (el relevo de subidas). La conversión de enlaces vive en `landing/enlace.js` porque la usan el servidor y la portada; la subida entera, en `landing/subir.js`, en el navegador.
+El código está en pocas piezas: `src/core.js` (un manejador `Request → Response` con APIs web), `src/node.js` y `src/worker.js` (los adaptadores, de pocas líneas) `src/graph.js` y `src/api.js` (la sesión de Microsoft y el acceso por ID, solo en Node) y `src/relay.js` (el relevo de subidas). La conversión de enlaces vive en `landing/enlace.js` porque la usan el servidor y la portada; la subida entera, en `landing/subir.js`, en el navegador.
 
 ---
 
@@ -225,12 +271,17 @@ Sin vender humo:
 - **El relevo gasta cupo de Workers**: una petición por trozo de 50 MiB, así que las 100 000 diarias del plan gratuito dan para unos 5 TB al día. CORS solo deja usarlo desde tu portada, pero fuera del navegador cualquiera podría mandarle trozos a sesiones de subida de OneDrive suyas.
 - **La caducidad cambia el enlace de «puede ver» de siempre.** Microsoft da uno solo por archivo, así que al ponerle fecha también caduca el de Segovia. Los enlaces con contraseña son aparte y Segovia no puede abrirlos.
 - **La sesión dura lo que la pestaña**, y Microsoft no renueva más allá de 24 horas sin volver a iniciar sesión. Las subidas en curso no dependen de ella: la URL de cada sesión de subida lleva su propio permiso.
+- **La lista de carpetas compartidas no puede ser completa.** Microsoft no da ninguna llamada que las enumere: `sharedWithMe` se apaga a partir de noviembre de 2026 según su documentación, y ya devuelve de menos (en una cuenta con cinco carpetas compartidas, solo una). «Compartido conmigo» junta tus accesos directos, lo que `sharedWithMe` haya dado y los enlaces que hayas pegado, y esos dos últimos se recuerdan solo en ese navegador. Si una carpeta no aparece, búscala por su nombre, pega su enlace o añádele un acceso directo desde la web de OneDrive.
+- **Un enlace de solo lectura deja entrar, pero no subir.** La carpeta se abre y el error llega al intentar subir.
+- **Cada cuenta tiene su propia cuota.** Lo que subes a una carpeta compartida gasta el espacio de su dueño, no el tuyo. Un plan familiar no es un bloque común: son 1 TB por persona.
+- **El acceso por ID sirve una sola carpeta, de una sola cuenta.** Si se llena, hay que elegir otra.
 
 ---
 
 ## 📋 Pendiente
 
 - **OneDrive de empresa y SharePoint.**
+- **Elegir servidor también en el proxy público.** Ahora solo lo hace el servido por ID.
 - **Descargar las partes juntas.** Ahora quien recibe un archivo troceado se baja cada parte y las junta con 7-Zip.
 
 ---
@@ -240,8 +291,9 @@ Sin vender humo:
 Lo que hace Segovia con tus datos, sin letra pequeña:
 
 - **Al subir**, la sesión de Microsoft se hace en tu navegador y los tokens se quedan en el `sessionStorage` de la pestaña. Los archivos van del navegador a Microsoft, directos o por el relevo de Cloudflare, que reenvía los trozos sin guardarlos ni ver tu sesión. El servidor de Segovia no recibe ni tus archivos ni tus tokens.
+- **En el acceso por ID**, que es opcional y solo de quien instala la instancia, el servidor sí guarda el refresh token de esa cuenta, en un archivo con permisos 600 fuera del repo. No sale por la API ni llega al Worker. El registro de accesos apunta el ID del archivo, no la firma.
 - **Al abrir un enlace**, el servidor pregunta a Microsoft por él y guarda la respuesta en memoria unos minutos. El registro de accesos de la instancia apunta la ruta (que contiene el enlace compartido), el código de respuesta y el navegador, para diagnosticar fallos.
-- **No hay cookies, cuentas, analítica ni publicidad.** El navegador solo guarda la última carpeta y pestaña elegidas, y las subidas a medias para poder reanudarlas.
+- **No hay cookies, cuentas, analítica ni publicidad.** El navegador solo guarda la última carpeta y pestaña elegidas, las carpetas compartidas que ha visto y las subidas a medias para poder reanudarlas.
 - El permiso que pide la app (`Files.ReadWrite.All`) sirve para listar carpetas, subir y crear enlaces, y solo se usa cuando tú lo pides. Puedes retirarlo cuando quieras en [account.live.com/consent/Manage](https://account.live.com/consent/Manage).
 
 Segovia se ofrece tal cual, sin garantías (licencia MIT), y no tiene relación con Microsoft. Eres responsable de lo que subas y compartas.
@@ -256,6 +308,8 @@ npm start    # servidor local con el .env si existe
 ```
 
 Los tests cubren la conversión de enlaces en los dos sentidos, la elección del modo, las cabeceras del proxy, la detección del tipo de archivo, la lectura del `tempauth`, la redirección de Workers a la instancia propia, el rechazo de enlaces de editar, qué acepta el relevo y cómo se trocean los archivos.
+
+`test/api.test.js` prueba el acceso por ID con Microsoft simulado: rutas que no salen de la raíz, claves y firmas, la rotación del refresh token, los avisos, y que el proxy renueve la URL, retome tras un corte y cambie de conexión sin perder ni repetir un byte.
 
 En `tools/medir-subida.mjs` está el prototipo con el que se midió la subida.
 
