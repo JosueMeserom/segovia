@@ -8,7 +8,7 @@
  * paralelo son archivos. Para uno grande, se trocea en partes (.001, .002…) que
  * 7-Zip vuelve a juntar.
  */
-import { toPath } from './enlace.js';
+import { toPath, b64url } from './enlace.js';
 
 const AUTH = 'https://login.microsoftonline.com/consumers/oauth2/v2.0/';
 const GRAPH = 'https://graph.microsoft.com/v1.0';
@@ -21,6 +21,7 @@ const TROZO = { directo: 32 * 327680, relay: 160 * 327680 };
 const K_SESION = 'segovia:sesion';
 const K_DESTINO = 'segovia:destino';
 const K_SUBIDA = 'segovia:subida:';
+const K_COMPARTIDAS = 'segovia:compartidas:';
 
 // ── Funciones puras (con test) ───────────────────────────────────────────────
 
@@ -36,6 +37,32 @@ export const nombreParte = (nombre, i) => `${nombre}.${String(i + 1).padStart(3,
 
 /** Primer byte que Microsoft espera, de `nextExpectedRanges: ["26214400-"]`. */
 export const esperado = (d) => Number(d?.nextExpectedRanges?.[0]?.split('-')[0]);
+
+/**
+ * La carpeta a la que lleva un elemento de Graph, o null si no es una. Un acceso
+ * directo o algo compartido vive en otra unidad: se abre por `remoteItem`; por su
+ * ID local o por ruta, Graph responde 422.
+ */
+export function carpeta(x) {
+  const r = x.remoteItem;
+  if (r?.folder) return { nombre: x.name, base: `/drives/${r.parentReference?.driveId ?? x.parentReference?.driveId}/items/${r.id}`, compartida: true };
+  return x.folder ? { nombre: x.name, base: `/drives/${x.parentReference.driveId}/items/${x.id}` } : null;
+}
+
+/** Sin repetir la misma carpeta real; se queda con la primera. */
+export function sinRepetir(carpetas) {
+  const vistas = new Set();
+  return carpetas.filter((c) => !vistas.has(c.base) && vistas.add(c.base));
+}
+
+/**
+ * Solo las carpetas de una búsqueda. Un acceso directo sale como carpeta normal y
+ * sin `remoteItem`, y abierto así da 422: se cambia por su destino con `accesos`,
+ * un Map de su ID a la carpeta real.
+ */
+export const deBusqueda = (resultados, accesos) => sinRepetir(resultados.map((x) => accesos.get(x.id) ?? carpeta(x)).filter(Boolean));
+
+export const unidadDe = (base) => base.match(/^\/drives\/([^/]+)/)?.[1];
 
 // ── Utilidades ───────────────────────────────────────────────────────────────
 
@@ -125,10 +152,10 @@ async function entrar() {
 async function g(path, opt = {}) {
   const r = await fetch(path.startsWith('https:') ? path : GRAPH + path, {
     ...opt,
-    headers: { authorization: 'Bearer ' + (await token()), 'content-type': 'application/json' },
+    headers: { ...opt.headers, authorization: 'Bearer ' + (await token()), 'content-type': 'application/json' },
   });
   const d = r.status === 204 ? null : await r.json().catch(() => null);
-  if (!r.ok) throw new Error(d?.error?.message || `Microsoft responde ${r.status}.`);
+  if (!r.ok) throw Object.assign(new Error(d?.error?.message || `Microsoft responde ${r.status}.`), { status: r.status });
   return d;
 }
 const post = (path, body) => g(path, { method: 'POST', body: JSON.stringify(body) });
@@ -140,35 +167,107 @@ const COMPARTIDO = { nombre: 'Compartido conmigo', base: 'compartido' };
 let migas = [RAIZ];
 const destino = () => migas.at(-1);
 
-const carpeta = (x) =>
-  x.folder
-    ? { nombre: x.name, base: `/drives/${x.parentReference.driveId}/items/${x.id}` }
-    : x.remoteItem?.folder && { nombre: x.name, base: `/drives/${x.remoteItem.parentReference.driveId}/items/${x.remoteItem.id}`, compartida: true };
+const CAMPOS = '$select=id,name,folder,remoteItem,parentReference';
+
+async function todas(url, paginas = Infinity) {
+  const todo = [];
+  for (; url && paginas > 0; paginas--) {
+    const d = await g(url);
+    todo.push(...d.value);
+    url = d['@odata.nextLink'];
+  }
+  return todo;
+}
+
+// Cada carpeta compartida gasta la cuota de su dueño, no la tuya: se enseña cuánto le queda.
+const cuotas = new Map(); // unidad → petición
+function cuota(unidad) {
+  if (!cuotas.has(unidad)) cuotas.set(unidad, g(`/drives/${unidad}?$select=quota`).then((d) => d.quota?.remaining));
+  return cuotas.get(unidad);
+}
+
+function pintarCarpetas(dirs, vacio, elegir) {
+  const lista = $('carpetas');
+  if (!dirs.length) return lista.replaceChildren(el('li', { className: 'vacio', textContent: vacio }));
+  lista.replaceChildren(
+    ...dirs.map((c) => {
+      const libre = el('small');
+      const fila = el('li', {}, el('button', { type: 'button', className: c.compartida ? 'compartida' : '', onclick: () => elegir(c) }, icono(c.compartida ? 'gente' : 'carpeta'), el('span', { className: 'texto' }, el('span', { textContent: c.nombre }), libre)));
+      const unidad = unidadDe(c.base);
+      if (c.compartida && unidad)
+        cuota(unidad).then(
+          (n) => n != null && (libre.textContent = `${tam(n)} libres`),
+          // El Almacén personal sale como un acceso directo más, pero no se puede usar por la API; ningún campo lo distingue.
+          (e) => e.status === 400 && fila.remove(),
+        );
+      return fila;
+    }),
+  );
+}
+
+// Lo que no se puede volver a preguntar: sharedWithMe se está apagando y los enlaces pegados no están en ningún sitio.
+let yo = null;
+const miUnidad = () => (yo ??= g('/me/drive').catch((e) => ((yo = null), Promise.reject(e))));
+const claveGuardadas = async () => K_COMPARTIDAS + (await miUnidad()).id;
+const guardadas = async () => leer(localStorage, await claveGuardadas()) ?? [];
+const guardar = async (lista) => localStorage.setItem(await claveGuardadas(), JSON.stringify(sinRepetir(lista)));
+
+async function compartidas() {
+  const accesos = (await todas(`/me/drive/root/children?${CAMPOS}&$top=500`)).map(carpeta).filter((c) => c?.compartida);
+  // Devuelve de menos y Microsoft la está retirando: lo que dé es un extra, y si falla no pasa nada.
+  const dadas = (await todas('/me/drive/sharedWithMe?$top=200').catch(() => [])).map(carpeta).filter(Boolean);
+  const recordadas = sinRepetir([...dadas, ...(await guardadas())]);
+  await guardar(recordadas);
+  return sinRepetir([...accesos, ...recordadas]).sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'));
+}
 
 async function listar() {
   const lista = $('carpetas');
   lista.replaceChildren(el('li', { className: 'vacio', textContent: 'Cargando…' }));
+  cuotas.clear();
   pintarMigas();
+  const entrar = (c) => abrir([...migas, c]);
   try {
-    let url = destino() === COMPARTIDO ? '/me/drive/sharedWithMe' : `${destino().base}/children?$select=id,name,folder,remoteItem,parentReference&$top=500`;
-    let todo = [];
-    while (url) {
-      const d = await g(url);
-      todo.push(...d.value);
-      url = d['@odata.nextLink'];
-    }
-    if (destino() === COMPARTIDO) todo = todo.map((x) => ({ ...x, folder: undefined }));
-    const dirs = todo.map(carpeta).filter(Boolean).sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'));
-    if (destino() === RAIZ) dirs.unshift({ ...COMPARTIDO, compartida: true, especial: true });
-    lista.replaceChildren(
-      ...dirs.map((c) =>
-        el('li', {}, el('button', { type: 'button', className: c.compartida ? 'compartida' : '', onclick: () => abrir([...migas, c.especial ? COMPARTIDO : c]) }, icono(c.compartida ? 'gente' : 'carpeta'), el('span', { textContent: c.nombre }))),
-      ),
-    );
-    if (!dirs.length) lista.replaceChildren(el('li', { className: 'vacio', textContent: destino() === COMPARTIDO ? 'Nadie ha compartido carpetas contigo.' : 'Sin subcarpetas.' }));
+    if (destino() === COMPARTIDO) return pintarCarpetas(await compartidas(), 'No veo carpetas compartidas contigo. Búscala por su nombre o pega su enlace.', entrar);
+    const dirs = (await todas(`${destino().base}/children?${CAMPOS}&$top=500`)).map(carpeta).filter(Boolean).sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'));
+    if (destino() === RAIZ) dirs.unshift({ ...COMPARTIDO, compartida: true });
+    pintarCarpetas(dirs, 'Sin subcarpetas.', (c) => (c.base === COMPARTIDO.base ? abrir([RAIZ, COMPARTIDO]) : entrar(c)));
   } catch (e) {
-    lista.replaceChildren(el('li', { className: 'vacio error', textContent: e.message }));
+    // Una compartida a la que ya no hay acceso no se vuelve a ofrecer.
+    if (e.status === 403 || e.status === 404) guardadas().then((l) => guardar(l.filter((c) => c.base !== destino().base))).catch(() => {});
+    const texto = e.status === 400 || e.status === 422 ? 'Microsoft no deja abrir esta carpeta desde aquí.' : e.message;
+    lista.replaceChildren(el('li', { className: 'vacio error', textContent: texto }));
   }
+}
+
+// Busca también en lo compartido contigo, incluso dentro de esas carpetas.
+let busqueda = 0;
+async function buscar(q) {
+  const n = ++busqueda;
+  $('carpetas').replaceChildren(el('li', { className: 'vacio', textContent: 'Buscando…' }));
+  try {
+    const raiz = await todas(`/me/drive/root/children?${CAMPOS}&$top=500`);
+    const accesos = new Map(raiz.filter((x) => x.remoteItem).map((x) => [x.id, carpeta(x)]));
+    // Mezcla archivos y carpetas sin orden útil: se miran varias páginas para que queden carpetas.
+    const hallados = await todas(`/me/drive/search(q='${encodeURIComponent(q.replace(/'/g, "''"))}')?${CAMPOS}&$top=200`, 3);
+    if (n !== busqueda) return;
+    const elegir = (c) => {
+      $('texto-buscar').value = '';
+      abrir(c.compartida ? [RAIZ, COMPARTIDO, c] : [RAIZ, c]);
+    };
+    pintarCarpetas(deBusqueda(hallados, accesos), `Ninguna carpeta con «${q}».`, elegir);
+  } catch (e) {
+    if (n === busqueda) $('carpetas').replaceChildren(el('li', { className: 'vacio error', textContent: e.message }));
+  }
+}
+
+async function abrirEnlace(enlace) {
+  const d = await g(`/shares/u!${b64url(enlace)}/driveItem?$select=id,name,folder,parentReference`, { headers: { prefer: 'redeemSharingLinkIfNecessary' } });
+  const c = carpeta(d);
+  if (!c) throw new Error('Ese enlace es de un archivo, no de una carpeta.');
+  const compartida = { ...c, compartida: true };
+  await guardar([compartida, ...(await guardadas())]);
+  abrir([RAIZ, COMPARTIDO, compartida]);
 }
 
 function abrir(nuevas) {
@@ -189,7 +288,15 @@ function pintarMigas() {
   $('soltar').classList.toggle('apagado', virtual);
   $('archivos').disabled = virtual;
   $('nueva').hidden = virtual;
-  $('a-donde').textContent = virtual ? 'Entra en una de las carpetas para subir ahí' : 'Se subirán a «' + destino().nombre + '»';
+  $('pegar').hidden = !virtual;
+  const texto = virtual ? 'Entra en una de las carpetas para subir ahí' : 'Se subirán a «' + destino().nombre + '»';
+  $('a-donde').textContent = texto;
+  const { base } = destino();
+  const unidad = unidadDe(base);
+  if (unidad)
+    cuota(unidad)
+      .then((n) => n != null && destino().base === base && ($('a-donde').textContent = `${texto} · ${tam(n)} libres`))
+      .catch(() => {});
 }
 
 async function crearCarpeta(nombre) {
@@ -507,7 +614,7 @@ function pintarSesion() {
   $('fuera').hidden = dentro;
   $('dentro').hidden = !dentro;
   if (!dentro) return;
-  g('/me/drive')
+  miUnidad()
     .then((d) => ($('quien').textContent = `${d.owner?.user?.displayName ?? 'Tu cuenta'} · ${tam(d.quota.remaining)} libres`))
     .catch(() => {});
   listar();
@@ -540,6 +647,7 @@ function iniciar() {
       .catch((e) => ($('error-entrar').textContent = e.message));
   $('salir').onclick = () => {
     sessionStorage.removeItem(K_SESION);
+    yo = null;
     pintarSesion();
   };
   $('archivos').onchange = (e) => {
@@ -557,6 +665,28 @@ function iniciar() {
   // Un archivo soltado fuera de la zona no debe abrirse en la pestaña.
   addEventListener('dragover', (e) => e.preventDefault());
   addEventListener('drop', (e) => e.preventDefault());
+
+  let espera;
+  $('texto-buscar').oninput = (e) => {
+    clearTimeout(espera);
+    const q = e.target.value.trim();
+    if (!q) {
+      busqueda++;
+      return listar();
+    }
+    if (q.length >= 2) espera = setTimeout(() => buscar(q), 400);
+  };
+  $('buscar').onsubmit = (e) => e.preventDefault();
+  $('pegar').onsubmit = (e) => {
+    e.preventDefault();
+    const enlace = $('enlace-carpeta').value.trim();
+    $('error-pegar').textContent = '';
+    if (!enlace) return;
+    abrirEnlace(enlace).then(
+      () => ($('enlace-carpeta').value = ''),
+      (err) => ($('error-pegar').textContent = err.status === 400 || err.status === 404 ? 'Ese enlace no abre ninguna carpeta.' : err.message),
+    );
+  };
 
   $('nueva').onclick = () => {
     $('nueva').hidden = true;

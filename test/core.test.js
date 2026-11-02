@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { toPath, fromPath, esEmpresa } from '../landing/enlace.js';
 import { pickMode, kindOf, proxyHeaders, tempauthExp, isBot, handle } from '../src/core.js';
 import { relay, relayTarget } from '../src/relay.js';
-import { partes, nombreParte, esperado } from '../landing/subir.js';
+import { partes, nombreParte, esperado, carpeta, sinRepetir, deBusqueda, unidadDe } from '../landing/subir.js';
 
 const CID = 'https://1drv.ms/v/c/8cf2e82e4f98b498/IQCpdMbCZGm7QbdveSe-zYVHAVZFVCCJrejuHQD7SRE58Z8';
 
@@ -128,4 +128,33 @@ test('subida: partes, nombres y por dónde sigue', () => {
   assert.equal(nombreParte('fotos.7z', 0), 'fotos.7z.001');
   assert.equal(nombreParte('fotos.7z', 11), 'fotos.7z.012');
   assert.equal(esperado({ nextExpectedRanges: ['26214400-'] }), 26214400);
+});
+
+test('carpetas: lo compartido se abre por su unidad real; un archivo no es carpeta', () => {
+  const propia = { id: 'A!1', name: 'Mía', folder: {}, parentReference: { driveId: 'A' } };
+  assert.deepEqual(carpeta(propia), { nombre: 'Mía', base: '/drives/A/items/A!1' });
+  const acceso = { id: 'A!2', name: 'De otro', remoteItem: { id: 'B!9', folder: {}, parentReference: { driveId: 'B' } } };
+  assert.deepEqual(carpeta(acceso), { nombre: 'De otro', base: '/drives/B/items/B!9', compartida: true });
+  // En una búsqueda lo remoto trae `folder` y `remoteItem` a la vez: manda `remoteItem`.
+  assert.equal(carpeta({ ...acceso, folder: {}, parentReference: { driveId: 'A' } }).base, '/drives/B/items/B!9');
+  assert.equal(carpeta({ id: 'A!3', name: 'x.7z', file: {} }), null);
+  assert.equal(carpeta({ id: 'A!4', name: 'x.7z', remoteItem: { id: 'B!4', file: {} } }), null);
+  assert.equal(unidadDe('/drives/B/items/B!9'), 'B');
+  assert.equal(unidadDe('/me/drive/root'), undefined);
+});
+
+test('búsqueda: solo carpetas, los accesos directos van a su destino y sin repetir', () => {
+  const destino = { nombre: 'Familia', base: '/drives/B/items/B!9', compartida: true };
+  const accesos = new Map([['A!2', destino]]);
+  const r = deBusqueda(
+    [
+      { id: 'A!2', name: 'Familia', folder: {}, parentReference: { driveId: 'A' } }, // el acceso directo, como carpeta normal
+      { id: 'A!7', name: 'Familia', folder: {}, remoteItem: { id: 'B!9', folder: {}, parentReference: { driveId: 'B' } } }, // la carpeta real
+      { id: 'A!8', name: 'foto.png', file: {} },
+      { id: 'A!1', name: 'Mía', folder: {}, parentReference: { driveId: 'A' } },
+    ],
+    accesos,
+  );
+  assert.deepEqual(r.map((c) => c.base), ['/drives/B/items/B!9', '/drives/A/items/A!1']);
+  assert.deepEqual(sinRepetir([{ base: 'x', n: 1 }, { base: 'x', n: 2 }]), [{ base: 'x', n: 1 }]);
 });

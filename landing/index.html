@@ -170,6 +170,14 @@
   .carpetas svg { flex: none; width: 20px; height: 20px; color: var(--piedra); }
   .carpetas .compartida svg { color: var(--agua); }
   .carpetas span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .carpetas .texto { display: flex; flex-direction: column; min-width: 0; text-align: left; }
+  .carpetas small { color: var(--tenue); font-size: .75rem; line-height: 1.2; }
+  .carpetas small:empty { display: none; }
+  .buscar { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; padding: .5rem .6rem; border-bottom: 1px solid var(--linea); }
+  .buscar input { flex: 1; min-width: 0; padding: .4rem .7rem; border-radius: 8px; border: 1px solid var(--linea); background: var(--panel); color: var(--texto); font: inherit; font-size: .9rem; }
+  .buscar input:focus { outline: none; border-color: var(--piedra); }
+  .buscar .error { flex-basis: 100%; color: var(--rojo); }
+  .buscar .error:empty { display: none; }
   .carpetas .vacio { grid-column: 1 / -1; padding: .55rem .6rem; color: var(--tenue); font-size: .9rem; }
   .carpetas .vacio.error { color: var(--rojo); }
   .pie-destino { display: flex; align-items: center; gap: .5rem; padding: .5rem .8rem; border-top: 1px solid var(--linea); }
@@ -324,6 +332,14 @@
       <div class="cuenta"><span id="quien">Conectado</span><button type="button" class="boton-suave" id="salir">Cerrar sesión</button></div>
       <div class="destino">
         <nav class="migas" id="migas" aria-label="Carpeta de destino"></nav>
+        <form class="buscar" id="buscar" role="search">
+          <input id="texto-buscar" type="search" aria-label="Buscar una carpeta" placeholder="Buscar carpeta, también compartida" autocomplete="off">
+        </form>
+        <form class="buscar" id="pegar" hidden>
+          <input id="enlace-carpeta" type="url" aria-label="Enlace de una carpeta compartida" placeholder="O pega el enlace de una carpeta compartida" autocomplete="off" spellcheck="false">
+          <button class="chip principal">Abrir</button>
+          <small class="error" id="error-pegar" aria-live="polite"></small>
+        </form>
         <ul class="carpetas" id="carpetas"></ul>
         <div class="pie-destino">
           <button type="button" class="boton-suave" id="nueva">+ Carpeta nueva</button>
