@@ -421,8 +421,9 @@ async function arrancar() {
 
 async function sesion(t) {
   const guardada = leer(localStorage, t.clave);
-  if (guardada && Date.parse(guardada.exp) > Date.now()) {
-    // Subida a medias de otra vez: se sigue donde se quedó.
+  if (guardada) {
+    // Subida a medias de otra vez: se sigue donde se quedó. Se pregunta a Microsoft porque su fecha no vale: pasa a
+    // los 15 min y la sesión sigue viva (medido a las 2 h; a las 24 h, 401).
     const r = await fetch(guardada.url).catch(() => null);
     if (r?.ok) {
       t.offset = esperado(await r.json());
@@ -431,7 +432,7 @@ async function sesion(t) {
     }
   }
   const s = await post(`${t.dest.base}:/${encodeURIComponent(t.nombre)}:/createUploadSession`, { item: { '@microsoft.graph.conflictBehavior': 'rename' } });
-  localStorage.setItem(t.clave, JSON.stringify({ url: s.uploadUrl, exp: s.expirationDateTime }));
+  localStorage.setItem(t.clave, JSON.stringify({ url: s.uploadUrl, creada: Date.now() }));
   t.offset = 0;
   return s.uploadUrl;
 }
@@ -471,7 +472,7 @@ async function subir(t) {
     }
     await dormir(Math.min(2 ** fallos, 30) * 1000);
     const s = await fetch(t.url).catch(() => null);
-    if (s?.status === 404) {
+    if (s?.status === 401 || s?.status === 404) {
       localStorage.removeItem(t.clave);
       t.url = await sesion(t);
     } else if (s?.ok) t.offset = esperado(await s.json());
@@ -635,7 +636,7 @@ function iniciar() {
   const ahora = Date.now();
   let medias = 0;
   for (const k of Object.keys(localStorage).filter((k) => k.startsWith(K_SUBIDA))) {
-    if (Date.parse(leer(localStorage, k)?.exp) > ahora) medias++;
+    if (leer(localStorage, k)?.creada > ahora - 864e5) medias++; // la URL de la sesión lleva un permiso de 24 h
     else localStorage.removeItem(k);
   }
   if (medias) aviso(`Hay ${medias} subida${medias > 1 ? 's' : ''} a medias: elige otra vez los mismos archivos, en la misma carpeta, y seguirán donde se quedaron.`);
