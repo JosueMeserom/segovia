@@ -237,6 +237,7 @@ Sin `encode`: los vídeos ya van comprimidos y lo único que conseguiría es gas
 | `SEGOVIA_DIR` | `~/.config/segovia` | Dónde se guardan la sesión y las claves del acceso por ID |
 | `AVISO_CMD` | — | Comando que recibe el aviso como último argumento si no se puede renovar la sesión. Sin él, va al registro |
 | `PROXY_MIN_MBS` | `10` | MB/s por debajo de los cuales el servido por ID prueba otra conexión. `0` lo apaga |
+| `PROXY_SALIDA` | | Dirección IP local desde la que el servido por ID sale hacia Microsoft. Sirve para llevar solo ese tráfico por un túnel cuando la ruta del proveedor a Microsoft va mal (medido: 0,9 MB/s directo y 50 por el túnel, a la vez). Si la salida falla, vuelve a la conexión normal durante diez minutos |
 
 ---
 

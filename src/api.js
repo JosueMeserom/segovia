@@ -168,11 +168,16 @@ function buscar(host, op, cb) {
 const agente = new https.Agent({ keepAlive: false });
 const PLAZO_RESPUESTA = 5000; // ms para conectar y recibir las cabeceras
 
-const intento = ({ url, method, headers, signal }) =>
+// PROXY_SALIDA: dirección local desde la que salir hacia Microsoft, para llevar solo este tráfico por otra
+// ruta (un túnel) cuando la del proveedor va mal. Si esa salida falla, se deja de usar un rato.
+let salidaMala = 0;
+const salida = () => (process.env.PROXY_SALIDA && salidaMala < Date.now() ? process.env.PROXY_SALIDA : undefined);
+
+const intento = ({ url, method, headers, signal }, local = salida()) =>
   new Promise((ok, ko) => {
     let ip;
     const elegir = (host, op, cb) => buscar(host, op, (e, a, f) => ((ip = Array.isArray(a) ? a[0]?.address : a), cb(e, a, f)));
-    const req = https.request(url, { method, headers, signal, agent: agente, lookup: elegir }, (res) => {
+    const req = https.request(url, { method, headers, signal, agent: agente, lookup: elegir, localAddress: local }, (res) => {
       res.socket.setTimeout(0); // a partir de aquí, de los parones se ocupa `vigilado`
       const vacia = method === 'HEAD' || res.statusCode === 204 || res.statusCode === 304;
       if (vacia) res.resume();
@@ -182,7 +187,7 @@ const intento = ({ url, method, headers, signal }) =>
     });
     // En el socket y no en la petición, que no cuenta el tiempo de conectar: una IP que ya no existe ni rechaza ni contesta.
     req.on('socket', (s) => s.setTimeout(PLAZO_RESPUESTA, () => req.destroy(Object.assign(new Error('Microsoft no contesta'), { code: 'ETIMEDOUT' }))));
-    req.on('error', (e) => ko(Object.assign(e, { ip }))).end();
+    req.on('error', (e) => ko(Object.assign(e, { ip, local }))).end();
   });
 
 /** Como fetch, pero eligiendo servidor y diciendo cuál ha sido en `ip`. Se sustituye en los tests. */
@@ -193,7 +198,14 @@ export const red = {
     try {
       r = await intento(p);
     } catch (e) {
-      if (p.signal?.aborted || !e.ip) throw e;
+      if (p.signal?.aborted) throw e;
+      if (e.local) {
+        // No se sabe si ha fallado el servidor o la salida: se repite por la conexión normal y sin culpar al servidor.
+        console.log(`La salida ${e.local} falla (${e.code ?? e.message}): diez minutos por la conexión normal`);
+        salidaMala = Date.now() + MEMORIA;
+        return intento(p);
+      }
+      if (!e.ip) throw e;
       console.log(`Servidor descartado, ${e.ip}: ${e.code ?? e.message}`);
       aprender(e.ip, { lenta: true });
       if (recordados().delete(e.ip)) guardarRecordados();
