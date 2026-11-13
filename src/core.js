@@ -30,9 +30,11 @@ export function kindOf(mime = '', name = '') {
   return Object.keys(EXT).find((k) => EXT[k].includes(ext)) ?? 'other';
 }
 
+const MODOS = ['redirect', 'proxy', 'relay', 'auto'];
+
 /** `?m=` del enlace; si no, DEFAULT_MODE de la instancia; si no, redirect. */
 export function pickMode(url, env = {}) {
-  for (const m of [url.searchParams.get('m'), env.DEFAULT_MODE]) if (m === 'proxy' || m === 'redirect') return m;
+  for (const m of [url.searchParams.get('m'), env.DEFAULT_MODE]) if (MODOS.includes(m)) return m;
   return 'redirect';
 }
 
@@ -143,10 +145,40 @@ async function proxy(req, link, item) {
     await up.body?.cancel();
     up = await pedir((await resolve(link, true)).url);
   }
-  return new Response(up.body, { status: up.status, headers: proxyHeaders(up.headers, item.name) });
+  const h = proxyHeaders(up.headers, item.name);
+  h.set('access-control-allow-origin', '*'); // la página en modo auto mide esta vía desde otro origen
+  return new Response(up.body, { status: up.status, headers: h });
 }
 
-function page(item, kind, url) {
+// Modo auto: el navegador de quien mira prueba a la vez la descarga directa de Microsoft y la del
+// relevo, un par de segundos, y se queda con la mejor. Solo él sabe cómo le va Microsoft a su conexión.
+// Lo directo gana salvo que el relevo vaya claramente mejor: no gasta nada de nadie.
+const MEDIR = `
+const medir = async (u) => {
+  const ac = new AbortController();
+  const tope = setTimeout(() => ac.abort(), 4000);
+  let n = 0, t0 = 0;
+  try {
+    const r = await fetch(u, { signal: ac.signal, cache: 'no-store' }); // de la caché no se aprende nada
+    if (!r.ok) return 0;
+    t0 = performance.now();
+    const l = r.body.getReader();
+    for (;;) {
+      const { done, value } = await l.read();
+      if (done) break;
+      n += value.length;
+      if (performance.now() - t0 > 1500 || n > 20e6) break;
+    }
+  } catch {} finally { clearTimeout(tope); ac.abort(); }
+  return t0 ? n / Math.max(performance.now() - t0, 50) : 0;
+};
+const elegir = async ([directo, relevo]) => {
+  const [d, r] = await Promise.all([medir(directo), medir(relevo)]);
+  return r > d * 1.5 ? relevo : directo;
+};`;
+
+/** @param {string | null} relevo origen del relevo si la página tiene que medir y elegir (modo auto) */
+function page(item, kind, url, relevo = null) {
   const self = url.origin + url.pathname + url.search;
   // Los bots se bajan el archivo desde sus servidores: en redirect lo cogen
   // directamente de Microsoft. Por el proxy pasaría por la subida de casa, y
@@ -187,13 +219,30 @@ function page(item, kind, url) {
     meta.push(['og:description', `${(item.size / 1e6).toFixed(1)} MB`]);
   }
 
-  const src = esc('/raw' + url.pathname + url.search);
-  const body = {
-    video: `<video src="${src}" controls autoplay playsinline></video>`,
-    audio: `<audio src="${src}" controls autoplay></audio>`,
-    image: `<img src="${src}" alt="${esc(item.name)}">`,
-    other: `<a href="${src}">Descargar ${esc(item.name)}</a>`,
-  }[kind];
+  // En auto, el elemento nace sin origen y se lo pone el guion cuando ha elegido; sin JavaScript, lo directo.
+  const src = relevo ? '' : ` src="${esc('/raw' + url.pathname + url.search)}"`;
+  const vias = ['/raw' + url.pathname + '?m=redirect', relevo + '/raw' + url.pathname + '?m=relay'];
+  const guion = !relevo
+    ? ''
+    : `<script>${MEDIR}
+elegir(${JSON.stringify(vias).replace(/</g, '\\u003c')}).then((u) => {
+  const e = document.querySelector('video, audio, img');
+  if (e) return (e.src = u);
+  document.querySelector('a').href = u;
+  document.querySelector('p').textContent = 'Descargando. Si no empieza:';
+  location.href = u;
+});
+</script>
+<noscript><a href="${esc(vias[0])}">${esc(item.name)}</a></noscript>`;
+  const body =
+    {
+      video: `<video${src} controls autoplay playsinline></video>`,
+      audio: `<audio${src} controls autoplay></audio>`,
+      image: `<img${src} alt="${esc(item.name)}">`,
+      other: relevo
+        ? `<div><p>Midiendo la conexión…</p><a href="${esc(vias[0])}">Descargar ${esc(item.name)}</a></div>`
+        : `<a${src.replace('src', 'href')}>Descargar ${esc(item.name)}</a>`,
+    }[kind] + guion;
 
   return `<!DOCTYPE html>
 <html lang="es">
@@ -221,7 +270,8 @@ ${body}
 
 /**
  * @param {Request} req
- * @param {{ DEFAULT_MODE?: string, REDIRECT_ONLY?: boolean, PROXY_BASE?: string }} env
+ * @param {{ DEFAULT_MODE?: string, REDIRECT_ONLY?: boolean, PROXY_BASE?: string, RELAY_URL?: string, proxy?: typeof proxy }} env
+ *   `proxy`: cómo servir en modo proxy; Node pasa el suyo, que vigila la conexión con Microsoft (src/api.js).
  */
 export async function handle(req, env = {}) {
   if (req.method !== 'GET' && req.method !== 'HEAD') return text(405, 'Solo GET y HEAD.');
@@ -232,6 +282,15 @@ export async function handle(req, env = {}) {
   if (!link) return text(404, 'Esto no es un enlace de Segovia.');
 
   let mode = pickMode(url, env);
+  // El relevo es el Worker: él mismo si esto corre allí, o el de RELAY_URL si es la instancia propia.
+  const relevo = env.REDIRECT_ONLY ? url.origin : env.RELAY_URL ? new URL(env.RELAY_URL).origin : null;
+  // Auto solo cambia la página que ve un navegador; para todo lo demás (bots, /raw, descargadores) es redirect.
+  const auto = mode === 'auto' && relevo;
+  if (mode === 'auto') mode = 'redirect';
+  if (mode === 'relay' && !env.REDIRECT_ONLY) {
+    if (relevo) return redirect(relevo + url.pathname + url.search);
+    mode = 'proxy'; // sin Worker, lo más parecido: pasar por aquí
+  }
   if (mode === 'proxy' && env.REDIRECT_ONLY) {
     // Workers no hace proxy: se pasa a la instancia propia si la hay.
     if (env.PROXY_BASE) return redirect(env.PROXY_BASE.replace(/\/$/, '') + url.pathname + url.search);
@@ -245,10 +304,13 @@ export async function handle(req, env = {}) {
     // Los bots reciben siempre las meta etiquetas. Las personas, el reproductor
     // si es multimedia (también para imágenes: un <img> ignora el attachment), y
     // el archivo tal cual si no.
-    if (route === 'page' && (kind !== 'other' || isBot(req.headers.get('user-agent')))) {
-      return new Response(page(item, kind, url), { headers: { 'content-type': 'text/html; charset=utf-8' } });
+    // En auto, también quien abre en su navegador un archivo que no es multimedia recibe página: hay que medir.
+    const bot = isBot(req.headers.get('user-agent'));
+    const navega = auto && !bot && req.headers.get('sec-fetch-dest') === 'document';
+    if (route === 'page' && (kind !== 'other' || bot || navega)) {
+      return new Response(page(item, kind, url, auto && !bot ? relevo : null), { headers: { 'content-type': 'text/html; charset=utf-8' } });
     }
-    return mode === 'proxy' ? await proxy(req, link, item) : redirect(item.url);
+    return mode === 'redirect' ? redirect(item.url) : await (env.proxy ?? proxy)(req, link, item);
   } catch (e) {
     if (!e.status) console.error(e);
     return text(e.status ?? 502, e.status ? e.message : 'No se pudo contactar con Microsoft.');

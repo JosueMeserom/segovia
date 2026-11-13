@@ -36,6 +36,77 @@ test('modo: ?m= gana, luego DEFAULT_MODE, luego redirect', () => {
   assert.equal(pickMode(u(''), { DEFAULT_MODE: 'proxy' }), 'proxy');
   assert.equal(pickMode(u('?m=raro'), {}), 'redirect');
   assert.equal(pickMode(u(''), { DEFAULT_MODE: 'basura' }), 'redirect');
+  assert.equal(pickMode(u('?m=relay'), {}), 'relay');
+  assert.equal(pickMode(u(''), { DEFAULT_MODE: 'auto' }), 'auto');
+});
+
+/** handle() con Microsoft simulado: un archivo `nombre` cuya URL directa es https://my.microsoftpersonalcontent.com/d */
+async function conMicrosoft(nombre, fn) {
+  const real = globalThis.fetch;
+  const pedidas = [];
+  globalThis.fetch = async (url, init = {}) => {
+    url = String(url);
+    pedidas.push(url);
+    if (url.includes('badgerp')) return Response.json({ token: 't', expiryTimeUtc: new Date(Date.now() + 7 * 864e5).toISOString() });
+    if (url.endsWith('/permission')) return Response.json({ roles: ['read'] });
+    if (url.includes('/shares/')) return Response.json({ name: nombre, size: 10, file: { mimeType: 'application/x-test' }, '@content.downloadUrl': 'https://my.microsoftpersonalcontent.com/d' });
+    return new Response('0123456789', { status: init.headers?.range ? 206 : 200, headers: { 'content-type': 'application/x-test' } });
+  };
+  try {
+    return await fn(pedidas);
+  } finally {
+    globalThis.fetch = real;
+  }
+}
+
+test('relay: el Worker sirve él mismo; la instancia propia manda a su Worker, y sin Worker hace de proxy', async () => {
+  await conMicrosoft('a.7z', async (pedidas) => {
+    const w = await handle(new Request('https://w.example/raw/v/c/1a/rel1?m=relay', { headers: { range: 'bytes=0-9' } }), { REDIRECT_ONLY: true, PROXY_BASE: 'https://casa.example/' });
+    assert.equal(w.status, 206);
+    assert.equal(await w.text(), '0123456789');
+    assert.equal(w.headers.get('access-control-allow-origin'), '*');
+    assert.equal(pedidas.at(-1), 'https://my.microsoftpersonalcontent.com/d');
+
+    const casa = await handle(new Request('https://casa.example/raw/v/c/1a/rel1?m=relay'), { RELAY_URL: 'https://w.example/relay' });
+    assert.equal(casa.status, 302);
+    assert.equal(casa.headers.get('location'), 'https://w.example/raw/v/c/1a/rel1?m=relay');
+
+    let usado = 0;
+    const sola = await handle(new Request('https://casa.example/raw/v/c/1a/rel1?m=relay'), { proxy: async () => (usado++, new Response('x')) });
+    assert.equal(sola.status, 200);
+    assert.equal(usado, 1, 'usa el proxy que le pasa Node');
+  });
+});
+
+test('auto: el navegador recibe una página que mide las dos vías; bots, /raw y descargadores, lo de siempre', async () => {
+  const env = { DEFAULT_MODE: 'auto', RELAY_URL: 'https://w.example/relay' };
+  const nav = { 'sec-fetch-dest': 'document', 'user-agent': 'Mozilla/5.0 Chrome/130.0' };
+  await conMicrosoft('a.7z', async () => {
+    const pagina = await handle(new Request('https://casa.example/v/c/1a/auto1', { headers: nav }), env);
+    const html = await pagina.text();
+    assert.match(pagina.headers.get('content-type'), /html/);
+    assert.match(html, /"\/raw\/v\/c\/1a\/auto1\?m=redirect","https:\/\/w\.example\/raw\/v\/c\/1a\/auto1\?m=relay"/);
+    assert.doesNotThrow(() => new Function(html.match(/<script>([\s\S]*?)<\/script>/)[1]), 'el guion es JavaScript válido');
+
+    const curl = await handle(new Request('https://casa.example/v/c/1a/auto1', { headers: { 'user-agent': 'curl/8' } }), env);
+    assert.equal(curl.status, 302, 'sin navegador, el archivo');
+    assert.equal(curl.headers.get('location'), 'https://my.microsoftpersonalcontent.com/d');
+    const raw = await handle(new Request('https://casa.example/raw/v/c/1a/auto1', { headers: nav }), env);
+    assert.equal(raw.status, 302);
+
+    const bot = await (await handle(new Request('https://casa.example/v/c/1a/auto1', { headers: { 'user-agent': 'Discordbot/2.0' } }), env)).text();
+    assert.doesNotMatch(bot, /<script>/);
+    const sinRelevo = await handle(new Request('https://casa.example/v/c/1a/auto1', { headers: nav }), { DEFAULT_MODE: 'auto' });
+    assert.equal(sinRelevo.status, 302, 'sin relevo no hay nada que medir');
+  });
+  await conMicrosoft('a.mp4', async () => {
+    const html = await (await handle(new Request('https://w.example/v/c/1a/auto2?m=auto', { headers: nav }), { REDIRECT_ONLY: true })).text();
+    assert.match(html, /<video controls/, 'el vídeo nace sin origen');
+    assert.match(html, /"https:\/\/w\.example\/raw\/v\/c\/1a\/auto2\?m=relay"/, 'en el Worker, el relevo es él mismo');
+    const fijo = await (await handle(new Request('https://w.example/v/c/1a/auto2?m=redirect', { headers: nav }), { REDIRECT_ONLY: true })).text();
+    assert.match(fijo, /<video src="\/raw\/v\/c\/1a\/auto2\?m=redirect"/);
+    assert.doesNotMatch(fijo, /<script>/);
+  });
 });
 
 test('proxy: pasa lo de reproducir y saltar, quita attachment y lo demás', () => {

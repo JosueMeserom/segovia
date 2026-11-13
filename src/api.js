@@ -13,7 +13,7 @@ import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import { lookup, Resolver } from 'node:dns';
 import https from 'node:https';
 import { Readable } from 'node:stream';
-import { HttpError, proxyHeaders, tempauthExp } from './core.js';
+import { HttpError, proxyHeaders, tempauthExp, resolve } from './core.js';
 import { graph, leer, guardar } from './graph.js';
 
 const json = (status, datos) => new Response(JSON.stringify(datos), { status, headers: { 'content-type': 'application/json; charset=utf-8' } });
@@ -348,17 +348,21 @@ export function vigilado(primera, abrir, desde, hasta, { minBps = 10e6, ventana 
   );
 }
 
-async function servir(req, id, drive, url) {
-  let e = await enlace(id, drive);
-  if (url.searchParams.get('m') === 'redirect') return new Response(null, { status: 302, headers: { location: e.url } });
-
+/**
+ * Sirve un archivo de Microsoft eligiendo servidor, vigilando la conexión y pasando al relevo si hace falta.
+ * @param {Request} req
+ * @param {(caducada?: string) => Promise<{ url: string, nombre: string, mime?: string }>} obtener
+ *   la URL de descarga; con `caducada`, una nueva que no sea esa
+ */
+async function entregar(req, obtener) {
+  let e = await obtener();
   const pedir = async (headers) => {
     const una = () => red.pedir({ url: e.url, method: req.method, headers, signal: req.signal });
     let r = await una();
     if (r.status === 401 || r.status === 403) {
       // Caducó: se pide otra y se repite el mismo rango, sin que el reproductor se entere.
       await r.body?.cancel();
-      e = await enlace(id, drive, e.url);
+      e = await obtener(e.url);
       r = await una();
     }
     return r;
@@ -368,7 +372,7 @@ async function servir(req, id, drive, url) {
   for (const k of ['range', 'if-range']) if (req.headers.has(k)) headers[k] = req.headers.get(k);
   const up = await pedir(headers);
   const h = proxyHeaders(up.headers, e.nombre);
-  h.set('content-type', e.mime);
+  if (e.mime) h.set('content-type', e.mime);
   h.set('accept-ranges', 'bytes');
 
   // Lo que queda por entregar; sin saberlo, no se puede retomar.
@@ -379,6 +383,18 @@ async function servir(req, id, drive, url) {
   const cuerpo = vigilado(up, (r) => pedir({ range: r }), rango ? Number(rango[1]) : 0, hasta, { minBps, signal: req.signal });
   return new Response(cuerpo, { status: up.status, headers: h });
 }
+
+async function servir(req, id, drive, url) {
+  if (url.searchParams.get('m') === 'redirect') return new Response(null, { status: 302, headers: { location: (await enlace(id, drive)).url } });
+  return entregar(req, (caducada) => enlace(id, drive, caducada));
+}
+
+/** El modo proxy de los enlaces compartidos (src/core.js), con la misma vigilancia que el servido por ID. */
+export const proxyEnlace = (req, link, item) =>
+  entregar(req, async (caducada) => {
+    const i = caducada ? await resolve(link, true) : item;
+    return { url: i.url, nombre: i.name };
+  });
 
 // ── API ──────────────────────────────────────────────────────────────────────
 

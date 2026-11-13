@@ -9,3 +9,5 @@ directory = "landing"
 [vars]
 # Adónde mandar las peticiones en modo proxy. Sin esto, se sirven en redirect.
 PROXY_BASE = "https://segovia.ultrak.dynu.net"
+# Sin ?m= en el enlace, el navegador de quien lo abre mide lo directo y el relevo, y elige.
+DEFAULT_MODE = "auto"

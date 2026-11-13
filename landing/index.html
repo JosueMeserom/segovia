@@ -310,6 +310,8 @@
       <label><input type="radio" name="modo" value="" checked><span>El de la instancia</span></label>
       <label><input type="radio" name="modo" value="redirect"><span>Redirect</span></label>
       <label><input type="radio" name="modo" value="proxy"><span>Proxy</span></label>
+      <label><input type="radio" name="modo" value="relay"><span>Relevo</span></label>
+      <label><input type="radio" name="modo" value="auto"><span>Automático</span></label>
     </div>
     <div class="salida" id="salida">
       <output id="resultado"></output>
@@ -391,13 +393,15 @@
 
 <section>
   <div class="envoltorio">
-    <h2>Dos modos</h2>
+    <h2>Cuatro modos</h2>
     <p class="subtitulo">Se elige por enlace con <code>?m=</code>. Si no lo lleva, manda el de la instancia.</p>
     <div class="tabla">
       <table>
         <tr><th>Modo</th><th>Cómo</th><th>Para qué</th></tr>
         <tr><td>Redirect</td><td>Un <code>302</code> a la URL directa de Microsoft. Los bytes van de Microsoft a quien mira.</td><td>Lo normal. No gasta nada del servidor. Microsoft lo sirve como descarga, y esa URL caduca en una hora.</td></tr>
         <tr><td>Proxy</td><td>Los bytes pasan por este servidor, con saltos (<code>Range</code>) y como <code>inline</code>.</td><td>Cuando algo se empeña en descargar en vez de reproducir, o para saltar en vídeos largos pasada la hora. Solo en la instancia propia, no en Workers.</td></tr>
+        <tr><td>Relevo</td><td>Los bytes pasan por Cloudflare, sin tocar el servidor de nadie: de Microsoft al Worker y de ahí a quien mira.</td><td>Cuando la conexión de quien descarga llega mal a Microsoft: hay casas donde lo directo va a 1 MB/s y por Cloudflare a 50.</td></tr>
+        <tr><td>Automático</td><td>El navegador de quien abre el enlace prueba un par de segundos lo directo y el relevo, y sigue con lo más rápido.</td><td>Para no tener que saberlo. Fuera de un navegador (bots, descargadores, <code>/raw</code>) es un redirect.</td></tr>
       </table>
     </div>
   </div>

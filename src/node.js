@@ -10,7 +10,7 @@ import { createServer } from 'node:http';
 import { readFileSync } from 'node:fs';
 import { Readable } from 'node:stream';
 import { handle } from './core.js';
-import { api } from './api.js';
+import { api, proxyEnlace } from './api.js';
 import { leer, vigilar } from './graph.js';
 
 const { HOST = '127.0.0.1', PORT = '4040', PUBLIC_BASE_URL } = process.env;
@@ -44,13 +44,13 @@ createServer(async (req, res) => {
   const ac = new AbortController();
   res.on('close', () => ac.abort());
   const headers = {};
-  for (const k of ['user-agent', 'range', 'if-range', 'authorization', 'content-type']) if (req.headers[k]) headers[k] = req.headers[k];
+  for (const k of ['user-agent', 'range', 'if-range', 'authorization', 'content-type', 'sec-fetch-dest']) if (req.headers[k]) headers[k] = req.headers[k];
 
   const privada = /^\/(api|id)\//.test(url.pathname);
   const init = { method: req.method, headers, signal: ac.signal };
   if (privada && req.method !== 'GET' && req.method !== 'HEAD') Object.assign(init, { body: Readable.toWeb(req), duplex: 'half' });
   const peticion = new Request(url, init);
-  const r = await (privada ? api(peticion) : handle(peticion, process.env)).catch((e) => {
+  const r = await (privada ? api(peticion) : handle(peticion, { ...process.env, proxy: proxyEnlace })).catch((e) => {
     console.error(e);
     return new Response('Error interno.\n', { status: 500 });
   });

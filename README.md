@@ -48,6 +48,8 @@ O pégalo en la portada, que lo convierte y te deja elegir el modo.
 |---|---|
 | `?m=redirect` | Fuerza el modo redirect para este enlace |
 | `?m=proxy` | Fuerza el modo proxy para este enlace |
+| `?m=relay` | Fuerza el relevo: lo sirve el Worker de Cloudflare |
+| `?m=auto` | El navegador mide lo directo y el relevo, y elige |
 | (nada) | El de la instancia (`DEFAULT_MODE`), y si no hay, redirect |
 
 Los enlaces del formato antiguo (`1drv.ms/x/s!…`) se convierten igual. Los de `onedrive.live.com/?cid=…&authkey=…` van enteros en base64url bajo `/u/…`; la portada lo hace sola.
@@ -60,10 +62,12 @@ Los enlaces del formato antiguo (`1drv.ms/x/s!…`) se convierten igual. Los de 
 |---|---|---|
 | **Redirect** | Un `302` a la URL directa de Microsoft. Los bytes van de Microsoft a quien mira. | Lo normal. No gasta nada del servidor. |
 | **Proxy** | Los bytes pasan por el servidor, en streaming, reenviando `Range` e `If-Range`. Se devuelven `Content-Type`, `Content-Length`, `Content-Range`, `Accept-Ranges`, `ETag` y `Last-Modified`, y `Content-Disposition: attachment` pasa a `inline`. | Cuando algo se empeña en descargar en vez de reproducir, o para saltar en vídeos largos pasada la hora. |
+| **Relay** | Los bytes pasan por el Worker de Cloudflare: de Microsoft a Cloudflare y de ahí a quien mira, sin tocar la instancia propia. Mismas cabeceras que el proxy. En la instancia propia es un `302` al Worker de `RELAY_URL`; sin Worker, hace de proxy. | Cuando la conexión de quien descarga llega mal a Microsoft. Medido desde una misma casa y a la vez: 0,7 MB/s en directo y 55 por Cloudflare. Gasta una petición del cupo de Workers por cada conexión, y un vídeo abre una por salto. |
+| **Auto** | La página prueba a la vez lo directo y el relevo durante un segundo y medio (como mucho 20 MB de cada uno) y sigue con el relevo solo si va al menos un 50 % mejor. Quien abre en el navegador un archivo que no es multimedia recibe también una página, que mide y lanza la descarga. | Para que cada uno vaya por donde mejor le va sin tener que saberlo. Solo lo puede medir el navegador de quien descarga, así que fuera de él (bots, `/raw`, `curl`, gestores de descargas) es un redirect; y sin Worker no hay nada que comparar. |
 
 Las meta etiquetas para bots apuntan **siempre en redirect**, aunque el enlace lleve `?m=proxy`. Discord se baja el vídeo entero desde sus servidores antes de mostrarlo, porque muchos MP4 llevan el índice al final, y abandona a los ~10 segundos. Desde Microsoft le llega a tiempo; a través del proxy dependería de la subida del servidor. El `attachment` del redirect no le molesta. El modo elegido sí se respeta en el reproductor de la página y en `/raw`.
 
-En proxy, cada petición con `Range` usa la URL directa que haya en caché. Si Microsoft responde `401`/`403` porque acaba de caducar, se resuelve otra vez y se reintenta una sola vez. Si quien mira cierra el vídeo, se corta también la descarga a Microsoft.
+En la instancia propia, el proxy lleva la misma vigilancia que el servido por ID (elige servidor de Microsoft, retoma los cortes y pasa al relevo si la ruta va lenta; ver más abajo). En proxy, cada petición con `Range` usa la URL directa que haya en caché. Si Microsoft responde `401`/`403` porque acaba de caducar, se resuelve otra vez y se reintenta una sola vez. Si quien mira cierra el vídeo, se corta también la descarga a Microsoft.
 
 ---
 
@@ -231,7 +235,7 @@ Sin `encode`: los vídeos ya van comprimidos y lo único que conseguiría es gas
 | `HOST` | `127.0.0.1` | Dónde escucha. `172.17.0.1` si el proxy está en Docker |
 | `PORT` | `4040` | Puerto |
 | `PUBLIC_BASE_URL` | el `Host` de la petición, por `http` | URL pública, para las meta etiquetas |
-| `DEFAULT_MODE` | `redirect` | `redirect` o `proxy`, cuando el enlace no lleva `?m=` |
+| `DEFAULT_MODE` | `redirect` | `redirect`, `proxy`, `relay` o `auto`, cuando el enlace no lleva `?m=` |
 | `PROXY_BASE` | — | Solo en Workers: adónde mandar las peticiones en modo proxy. También es el único origen al que el relevo responde por CORS |
 | `ONEDRIVE_CLIENT_ID` | — | El Id. de aplicación de Entra. Sin él no hay pestaña de subir. No es secreto: va al navegador |
 | `RELAY_URL` | — | La ruta `/relay` del Worker. Sin ella, todo se sube directo y el servido por ID no tiene por dónde esquivar una ruta lenta a Microsoft |
