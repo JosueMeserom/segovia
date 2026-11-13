@@ -7,6 +7,10 @@
  * La uploadUrl ya lleva su permiso (no hace falta el token de la cuenta), así
  * que por aquí no pasa ninguna sesión. Solo se aceptan destinos de subida de
  * OneDrive personal, para no ser un proxy abierto.
+ *
+ * Lo mismo pasa al bajar: el servido por ID de una instancia puede pedir aquí
+ * (GET, con la URL de descarga en `x-download-url`) lo que por su ruta a
+ * Microsoft le llega a 1 MB/s. Esa URL también lleva su propio permiso.
  */
 const DESTINOS = /^(my\.microsoftpersonalcontent\.com|[a-z0-9-]+\.up\.1drv\.com)$/;
 
@@ -29,6 +33,16 @@ export async function relay(req, env = {}) {
     'access-control-max-age': '7200',
   };
   if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: cors });
+  if (req.method === 'GET') {
+    const origen = relayTarget(req.headers.get('x-download-url'));
+    if (!origen) return new Response('Solo descargas de OneDrive.\n', { status: 400 });
+    const pedir = {};
+    for (const k of ['range', 'if-range']) if (req.headers.has(k)) pedir[k] = req.headers.get(k);
+    const r = await fetch(origen, { headers: pedir, signal: req.signal });
+    const h = {};
+    for (const k of ['content-type', 'content-length', 'content-range', 'accept-ranges', 'etag', 'last-modified']) if (r.headers.has(k)) h[k] = r.headers.get(k);
+    return new Response(r.body, { status: r.status, headers: h });
+  }
   const target = relayTarget(req.headers.get('x-upload-url'));
   if (req.method !== 'PUT' || !target) return new Response('Solo PUT a una sesión de subida de OneDrive.\n', { status: 400, headers: cors });
 

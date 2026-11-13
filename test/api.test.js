@@ -9,7 +9,7 @@ const dir = mkdtempSync(join(tmpdir(), 'segovia-'));
 process.env.SEGOVIA_DIR = dir;
 process.env.ONEDRIVE_CLIENT_ID = 'cliente';
 process.env.PUBLIC_BASE_URL = 'https://s.example';
-const { api, segmentos, refRuta, firmar, tipoDe, vigilado, red, aprender, elegirIp } = await import('../src/api.js');
+const { api, segmentos, refRuta, firmar, tipoDe, vigilado, red, aprender, elegirIp, porRelevo } = await import('../src/api.js');
 const { guardar, leer, renovar } = await import('../src/graph.js');
 
 const hash = (c) => createHash('sha256').update(c).digest('hex');
@@ -308,6 +308,24 @@ test('elegir servidor: los que han ido rápido se recuerdan en disco y se usan a
   assert.equal(elegirIp(['8.8.4.4']), a, 'uno recordado gana a uno del DNS del que no se sabe nada');
   aprender(a, { lenta: true });
   assert.equal(elegirIp(['8.8.4.4']), '8.8.4.4', 'y si los recordados van mal, se vuelve al DNS');
+});
+
+test('relevo: lo activa una conexión directa lenta y lo apaga un relevo lento; sin RELAY_URL no existe', () => {
+  aprender('5.5.5.5', { lenta: true });
+  assert.equal(porRelevo(), false, 'sin relevo configurado, nada');
+  process.env.RELAY_URL = 'https://w.example/relay';
+  try {
+    assert.equal(porRelevo(), false, 'se empieza directo');
+    aprender('5.5.5.5', { lenta: true });
+    assert.equal(porRelevo(), true);
+    aprender(undefined, { rapida: true, relevo: true });
+    assert.equal(porRelevo(), true);
+    assert.equal(elegirIp(['5.5.5.6']), '5.5.5.6', 'lo que pasa por el relevo no cuenta como servidor de Microsoft');
+    aprender(undefined, { lenta: true, relevo: true });
+    assert.equal(porRelevo(), false, 'si el relevo también va lento, se vuelve a lo directo');
+  } finally {
+    delete process.env.RELAY_URL;
+  }
 });
 
 test('vigilado: enseña qué servidor es lento y cuál rápido', async () => {

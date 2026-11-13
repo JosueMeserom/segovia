@@ -117,6 +117,24 @@ test('relay: solo reenvía a sesiones de subida de OneDrive personal', async () 
   assert.equal(mal.status, 400);
 });
 
+test('relay: al bajar pasa el rango a Microsoft y devuelve su respuesta; a otro destino, no', async () => {
+  const fuera = await relay(new Request('https://w.example/relay', { headers: { 'x-download-url': 'https://evil.example/x', range: 'bytes=0-9' } }));
+  assert.equal(fuera.status, 400);
+  const real = globalThis.fetch;
+  let visto;
+  globalThis.fetch = async (url, init) => ((visto = { url, ...init.headers }), new Response('0123456789', { status: 206, headers: { 'content-range': 'bytes 5-14/100', 'set-cookie': 'no' } }));
+  try {
+    const r = await relay(new Request('https://w.example/relay', { headers: { 'x-download-url': 'https://my.microsoftpersonalcontent.com/d?tempauth=t', range: 'bytes=5-14', cookie: 'mia' } }));
+    assert.equal(r.status, 206);
+    assert.equal(r.headers.get('content-range'), 'bytes 5-14/100');
+    assert.equal(r.headers.get('set-cookie'), null);
+    assert.equal(await r.text(), '0123456789');
+    assert.deepEqual(visto, { url: 'https://my.microsoftpersonalcontent.com/d?tempauth=t', range: 'bytes=5-14' });
+  } finally {
+    globalThis.fetch = real;
+  }
+});
+
 test('subida: partes, nombres y por dónde sigue', () => {
   assert.deepEqual(partes(100), [[0, 100]]);
   const p = partes(2 ** 31 + 5);

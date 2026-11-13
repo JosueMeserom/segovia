@@ -161,6 +161,7 @@ Las claves van en `Authorization: Bearer …`, y todas las rutas son relativas a
 - Si la URL de Microsoft caduca, pide otra y repite el mismo rango.
 - Si la conexión se corta o se queda sin datos, sigue desde el mismo byte.
 - **Elige servidor de Microsoft.** Desde una misma casa medimos 90 MB/s hacia unos y 0,5 hacia otros, y el DNS reparte con rachas de un minuto entero hacia los lentos. Cada instancia recuerda cuál le ha ido bien y evita el que le ha ido mal; los rápidos los guarda en `servidores.json` y los sigue usando aunque el DNS pase días sin darlos. Si esperando a Microsoft llegan menos de `PROXY_MIN_MBS` y la conexión no va a más, cambia de conexión (cada una acelera durante muchos segundos, y cambiarla antes es volver a empezar); un reproductor que lee despacio porque no necesita más no dispara nada.
+- **Si lo lento es la ruta entera hasta Microsoft, usa el relevo.** Medido a la vez y contra el mismo servidor: 0,9 MB/s en directo y 55 por Cloudflare. Con `RELAY_URL` puesto, una conexión directa lenta hace que durante una hora pida el archivo al relevo (el mismo Worker de las subidas, con `GET` y la URL de descarga en `x-download-url`); si el relevo falla o también va lento, vuelve a lo directo. La URL de descarga lleva su propio permiso y caduca en una hora: la sesión de la cuenta sigue sin salir del servidor.
 
 Nada de esto corre en el Worker, que no importa estos módulos: el token no sale del servidor.
 
@@ -233,7 +234,7 @@ Sin `encode`: los vídeos ya van comprimidos y lo único que conseguiría es gas
 | `DEFAULT_MODE` | `redirect` | `redirect` o `proxy`, cuando el enlace no lleva `?m=` |
 | `PROXY_BASE` | — | Solo en Workers: adónde mandar las peticiones en modo proxy. También es el único origen al que el relevo responde por CORS |
 | `ONEDRIVE_CLIENT_ID` | — | El Id. de aplicación de Entra. Sin él no hay pestaña de subir. No es secreto: va al navegador |
-| `RELAY_URL` | — | La ruta `/relay` del Worker. Sin ella, todo se sube directo |
+| `RELAY_URL` | — | La ruta `/relay` del Worker. Sin ella, todo se sube directo y el servido por ID no tiene por dónde esquivar una ruta lenta a Microsoft |
 | `SEGOVIA_DIR` | `~/.config/segovia` | Dónde se guardan la sesión y las claves del acceso por ID |
 | `AVISO_CMD` | — | Comando que recibe el aviso como último argumento si no se puede renovar la sesión. Sin él, va al registro |
 | `PROXY_MIN_MBS` | `10` | MB/s por debajo de los cuales el servido por ID prueba otra conexión. `0` lo apaga |

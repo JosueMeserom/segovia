@@ -97,6 +97,19 @@ publico.setServers(['1.1.1.1', '8.8.8.8']);
 
 const esMalo = (ip) => malos.get(ip) > Date.now();
 
+// Cuando lo lento no es un servidor sino la ruta entera hasta Microsoft (medido: 0,9 MB/s directo y 55
+// por Cloudflare, a la vez y contra el mismo servidor), se pide por el relevo de RELAY_URL, el mismo de
+// las subidas. Se empieza siempre directo; una conexión directa lenta lo activa un rato, y si el relevo
+// falla o también va lento se vuelve a lo directo.
+const MEMORIA_RELEVO = 60 * 60e3;
+let relevoHasta = 0;
+let relevoMalo = 0;
+export const porRelevo = () => Boolean(process.env.RELAY_URL) && relevoHasta > Date.now() && relevoMalo < Date.now();
+function fallaRelevo(motivo) {
+  console.log(`El relevo falla (${motivo}): diez minutos sin él`);
+  relevoMalo = Date.now() + MEMORIA;
+}
+
 // Los que alguna vez han ido rápido se recuerdan en disco: Microsoft pasa días dando por
 // DNS solo los lentos, y los rápidos siguen sirviendo. Los enseñó el DNS para este mismo
 // nombre y el certificado se comprueba igual; uno que deje de responder se marca y se olvida.
@@ -131,7 +144,16 @@ function guardarRecordados() {
 }
 
 /** Lo que aprende cada conexión: `rapida` si ha dado de verdad lo pedido; `lenta` si se ha quedado corta. */
-export function aprender(ip, { rapida, lenta }) {
+export function aprender(ip, { rapida, lenta, relevo }) {
+  if (relevo) {
+    if (lenta) relevoMalo = Date.now() + MEMORIA;
+    else if (rapida) relevoHasta = Date.now() + MEMORIA_RELEVO; // mientras vaya bien, se sigue con él
+    return;
+  }
+  if (lenta && process.env.RELAY_URL && relevoHasta < Date.now()) {
+    console.log('Microsoft va lento en directo: una hora por el relevo');
+    relevoHasta = Date.now() + MEMORIA_RELEVO;
+  }
   if (!ip) return;
   if (rapida) {
     bueno = { ip, hasta: Date.now() + MEMORIA };
@@ -173,21 +195,25 @@ const PLAZO_RESPUESTA = 5000; // ms para conectar y recibir las cabeceras
 let salidaMala = 0;
 const salida = () => (process.env.PROXY_SALIDA && salidaMala < Date.now() ? process.env.PROXY_SALIDA : undefined);
 
-const intento = ({ url, method, headers, signal }, local = salida()) =>
+const intento = ({ url, method, headers, signal }, { relevo = method === 'GET' && porRelevo(), local = salida() } = {}) =>
   new Promise((ok, ko) => {
     let ip;
     const elegir = (host, op, cb) => buscar(host, op, (e, a, f) => ((ip = Array.isArray(a) ? a[0]?.address : a), cb(e, a, f)));
-    const req = https.request(url, { method, headers, signal, agent: agente, lookup: elegir, localAddress: local }, (res) => {
+    // Por el relevo no hay servidor de Microsoft que elegir: lo elige Cloudflare.
+    const req = (relevo
+      ? https.request(process.env.RELAY_URL, { method, headers: { ...headers, 'x-download-url': url }, signal, agent: agente })
+      : https.request(url, { method, headers, signal, agent: agente, lookup: elegir, localAddress: local })
+    ).on('response', (res) => {
       res.socket.setTimeout(0); // a partir de aquí, de los parones se ocupa `vigilado`
       const vacia = method === 'HEAD' || res.statusCode === 204 || res.statusCode === 304;
       if (vacia) res.resume();
       const h = new Headers();
       for (const [k, v] of Object.entries(res.headers)) if (typeof v === 'string') h.set(k, v);
-      ok(Object.assign(new Response(vacia ? null : Readable.toWeb(res), { status: res.statusCode, headers: h }), { ip: res.socket.remoteAddress }));
+      ok(Object.assign(new Response(vacia ? null : Readable.toWeb(res), { status: res.statusCode, headers: h }), relevo ? { relevo } : { ip: res.socket.remoteAddress }));
     });
     // En el socket y no en la petición, que no cuenta el tiempo de conectar: una IP que ya no existe ni rechaza ni contesta.
     req.on('socket', (s) => s.setTimeout(PLAZO_RESPUESTA, () => req.destroy(Object.assign(new Error('Microsoft no contesta'), { code: 'ETIMEDOUT' }))));
-    req.on('error', (e) => ko(Object.assign(e, { ip, local }))).end();
+    req.on('error', (e) => ko(Object.assign(e, relevo ? { relevo } : { ip, local }))).end();
   });
 
 /** Como fetch, pero eligiendo servidor y diciendo cuál ha sido en `ip`. Se sustituye en los tests. */
@@ -199,6 +225,10 @@ export const red = {
       r = await intento(p);
     } catch (e) {
       if (p.signal?.aborted) throw e;
+      if (e.relevo) {
+        fallaRelevo(e.code ?? e.message);
+        return intento(p, { relevo: false });
+      }
       if (e.local) {
         // No se sabe si ha fallado el servidor o la salida: se repite por la conexión normal y sin culpar al servidor.
         console.log(`La salida ${e.local} falla (${e.code ?? e.message}): diez minutos por la conexión normal`);
@@ -210,6 +240,12 @@ export const red = {
       aprender(e.ip, { lenta: true });
       if (recordados().delete(e.ip)) guardarRecordados();
       return intento(p);
+    }
+    // Un 401 o un 403 por el relevo son de Microsoft (la URL caducó) y los resuelve quien llama; un 416, un rango imposible.
+    if (r.relevo && !r.ok && ![401, 403, 416].includes(r.status)) {
+      fallaRelevo(`responde ${r.status}`);
+      await r.body?.cancel();
+      return intento(p, { relevo: false });
     }
     if (r.status < 500 && r.status !== 421) return r;
     console.log(`Servidor descartado, ${r.ip}: responde ${r.status}`);
@@ -231,6 +267,7 @@ export const red = {
 export function vigilado(primera, abrir, desde, hasta, { minBps = 10e6, ventana = 2000, plazo = 15000, signal } = {}) {
   let lector = primera.body.getReader();
   let ip = primera.ip;
+  let relevo = primera.relevo;
   let pos = desde;
   let espera = 0;
   let bytes = 0;
@@ -241,7 +278,7 @@ export function vigilado(primera, abrir, desde, hasta, { minBps = 10e6, ventana 
 
   const cambiar = async (motivo) => {
     if (++seguidos > 3) throw new Error(`Microsoft no da datos: ${motivo}`);
-    console.log(`Cambio de conexión en el byte ${pos}, desde ${ip ?? '?'}: ${motivo}`);
+    console.log(`Cambio de conexión en el byte ${pos}, desde ${relevo ? 'el relevo' : (ip ?? '?')}: ${motivo}`);
     lector.cancel().catch(() => {});
     const rango = `bytes=${pos}-${hasta}`;
     const r = await abrir(rango);
@@ -251,6 +288,7 @@ export function vigilado(primera, abrir, desde, hasta, { minBps = 10e6, ventana 
     }
     lector = r.body.getReader();
     ip = r.ip;
+    relevo = r.relevo;
     espera = bytes = anterior = 0;
     inicioVentana = Date.now();
   };
@@ -273,7 +311,7 @@ export function vigilado(primera, abrir, desde, hasta, { minBps = 10e6, ventana 
           }
           espera += Date.now() - inicio;
           if (r === null) {
-            aprender(ip, { lenta: true });
+            aprender(ip, { lenta: true, relevo });
             await cambiar(`${plazo / 1000} s sin datos`);
             continue;
           }
@@ -294,7 +332,7 @@ export function vigilado(primera, abrir, desde, hasta, { minBps = 10e6, ventana 
             anterior = bps;
             const mbs = (bps / 1e6).toFixed(1);
             // «Rápida» cuenta el tiempo real: si no, una lenta que apenas se espera lo parecería.
-            aprender(ip, { lenta, rapida: (bytes * 1000) / (Date.now() - inicioVentana) >= minBps });
+            aprender(ip, { lenta, rapida: (bytes * 1000) / (Date.now() - inicioVentana) >= minBps, relevo });
             espera = bytes = 0;
             inicioVentana = Date.now();
             // Si todo va lento (hora punta, una línea modesta), no se insiste: cada vez se espera el doble.
