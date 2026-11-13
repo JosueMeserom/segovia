@@ -243,36 +243,18 @@ test('vigilado: una conexión lenta se cambia por otra desde el mismo byte', asy
   };
   const texto = await new Response(vigilado(primera, abrir, 0, 299, { minBps: 1e6, ventana: 30 })).text();
   assert.equal(texto.length, 300);
-  assert.deepEqual(rangos, Array(3).fill(rangos[0]), 'abre tres a la vez, las tres desde el mismo byte');
+  assert.equal(rangos.length, 1);
   assert.match(texto, /^x+y+$/);
 });
 
-test('vigilado: de las conexiones nuevas se queda con la más rápida, sin perder ni repetir bytes', async () => {
-  const total = 3e6;
-  const dato = (i) => String.fromCharCode(97 + (i % 26));
-  const trozos = (desde, tam) => Array.from({ length: Math.ceil((total - desde) / tam) }, (_, k) => Array.from({ length: Math.min(tam, total - desde - k * tam) }, (_, j) => dato(desde + k * tam + j)).join(''));
-  const resp = (desde, tam, pausa, ip) => Object.assign(new Response(cuerpoFalso(trozos(desde, tam), pausa), { status: 206, headers: { 'content-range': `bytes ${desde}-${total - 1}/${total}` } }), { ip });
-  let n = 0;
-  const cancelados = [];
-  const abrir = async (r) => {
-    const desde = Number(r.match(/=(\d+)/)[1]);
-    const k = n++;
-    if (k === 0) throw new Error('ECONNRESET'); // una que ni abre no estropea la carrera
-    const res = k === 1 ? resp(desde, 100, 5, 'lenta') : resp(desde, 300000, 1, 'rapida');
-    const lector = res.body.getReader.bind(res.body);
-    res.body.getReader = () => {
-      const l = lector();
-      const cancel = l.cancel.bind(l);
-      l.cancel = (e) => (cancelados.push(res.ip), cancel(e));
-      return l;
-    };
-    return res;
-  };
-  const texto = await new Response(vigilado(resp(0, 100, 5, 'primera'), abrir, 0, total - 1, { minBps: 1e6, ventana: 30 })).text();
+test('vigilado: una conexión lenta que va acelerando no se cambia', async () => {
+  let cambios = 0;
+  const trozos = Array.from({ length: 40 }, (_, i) => 'x'.repeat(Math.round(1.2 ** i))); // cada vez más por el mismo tiempo
+  const total = trozos.join('').length;
+  const primera = parcial(cuerpoFalso(trozos, 8), 0, total - 1);
+  const texto = await new Response(vigilado(primera, async () => (cambios++, parcial(cuerpoFalso([]), 0, 0)), 0, total - 1, { minBps: 1e9, ventana: 30 })).text();
   assert.equal(texto.length, total);
-  for (const i of [0, 1, 4321, 999999, 1000000, 2345678, total - 1]) assert.equal(texto[i], dato(i), `byte ${i}`);
-  assert.equal(n, 3);
-  assert.deepEqual(cancelados, ['lenta'], 'la perdedora se cierra y la ganadora sigue');
+  assert.equal(cambios, 0);
 });
 
 test('vigilado: un reproductor que lee despacio no provoca cambios', async () => {
@@ -310,6 +292,22 @@ test('elegir servidor: evita los lentos, se queda con el rápido y pide otra opi
   assert.equal(elegirIp([]), '7.7.7.7', 'y vuelve si se recupera');
   aprender('7.7.7.7', { lenta: true });
   aprender(undefined, { rapida: true });
+});
+
+test('elegir servidor: los que han ido rápido se recuerdan en disco y se usan aunque el DNS no los dé', async () => {
+  const { readFileSync } = await import('node:fs');
+  const ip = '6.6.6.' + Math.floor(Math.random() * 250);
+  aprender(ip, { rapida: true });
+  assert.ok(JSON.parse(readFileSync(dir + '/servidores.json', 'utf8'))[ip] > Date.now() - 5000, 'queda en disco');
+  aprender(ip, { lenta: true }); // deja de ser «el bueno» del momento, pero sigue recordado
+  assert.equal(elegirIp(['9.9.9.9', '8.8.4.4']), '8.8.4.4', 'mientras está marcado como lento no se usa');
+  const [a, b] = ['6.6.7.1', '6.6.7.2'];
+  aprender(a, { rapida: true });
+  aprender(b, { rapida: true });
+  aprender(b, { lenta: true }); // ya no hay «bueno» del momento: toca elegir
+  assert.equal(elegirIp(['8.8.4.4']), a, 'uno recordado gana a uno del DNS del que no se sabe nada');
+  aprender(a, { lenta: true });
+  assert.equal(elegirIp(['8.8.4.4']), '8.8.4.4', 'y si los recordados van mal, se vuelve al DNS');
 });
 
 test('vigilado: enseña qué servidor es lento y cuál rápido', async () => {

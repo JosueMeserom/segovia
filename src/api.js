@@ -14,7 +14,7 @@ import { lookup, Resolver } from 'node:dns';
 import https from 'node:https';
 import { Readable } from 'node:stream';
 import { HttpError, proxyHeaders, tempauthExp } from './core.js';
-import { graph, leer } from './graph.js';
+import { graph, leer, guardar } from './graph.js';
 
 const json = (status, datos) => new Response(JSON.stringify(datos), { status, headers: { 'content-type': 'application/json; charset=utf-8' } });
 
@@ -90,8 +90,6 @@ function enlace(id, drive, caducada) {
 // comprobando contra el nombre, así que elegir IP no abre ningún agujero.
 
 const MEMORIA = 10 * 60e3;
-const META_CARRERA = 1e6; // bytes con los que una conexión gana la carrera
-const TOPE_CARRERA = 1500; // ms que dura como mucho
 let bueno = null; // { ip, hasta }
 const malos = new Map(); // ip → hasta cuándo evitarla
 const publico = new Resolver();
@@ -99,12 +97,46 @@ publico.setServers(['1.1.1.1', '8.8.8.8']);
 
 const esMalo = (ip) => malos.get(ip) > Date.now();
 
+// Los que alguna vez han ido rápido se recuerdan en disco: Microsoft pasa días dando por
+// DNS solo los lentos, y los rápidos siguen sirviendo. Los enseñó el DNS para este mismo
+// nombre y el certificado se comprueba igual; uno que deje de responder se marca y se olvida.
+const ARCHIVO_IPS = 'servidores.json';
+const CADUCA = 30 * 24 * 3600e3;
+let rapidos = null; // ip → última vez que fue rápida
+function recordados() {
+  if (!rapidos) {
+    rapidos = new Map();
+    try {
+      for (const [ip, t] of Object.entries(leer(ARCHIVO_IPS) ?? {})) if (t > Date.now() - CADUCA) rapidos.set(ip, t);
+    } catch {
+      // un archivo roto no impide servir: se vuelve a aprender
+    }
+  }
+  return rapidos;
+}
+function recordar(ip) {
+  const m = recordados();
+  const nueva = !(m.get(ip) > Date.now() - 3600e3); // a disco, como mucho una vez por hora y servidor
+  m.set(ip, Date.now());
+  if (!nueva) return;
+  rapidos = new Map([...m].sort((a, b) => b[1] - a[1]).slice(0, 20));
+  guardarRecordados();
+}
+function guardarRecordados() {
+  try {
+    guardar(ARCHIVO_IPS, Object.fromEntries(recordados()));
+  } catch (e) {
+    console.error('No se han podido guardar los servidores rápidos:', e.message);
+  }
+}
+
 /** Lo que aprende cada conexión: `rapida` si ha dado de verdad lo pedido; `lenta` si se ha quedado corta. */
 export function aprender(ip, { rapida, lenta }) {
   if (!ip) return;
   if (rapida) {
     bueno = { ip, hasta: Date.now() + MEMORIA };
     malos.delete(ip);
+    recordar(ip);
   }
   if (lenta) {
     malos.set(ip, Date.now() + MEMORIA);
@@ -115,7 +147,9 @@ export function aprender(ip, { rapida, lenta }) {
 /** @returns {string | null} la IP a usar de entre las que da el DNS, o null si hay que pedir otra opinión */
 export function elegirIp(ips) {
   if (bueno?.hasta > Date.now()) return bueno.ip;
-  const sanas = ips.filter((ip) => !esMalo(ip));
+  // Antes que uno del que no se sabe nada, uno que ya ha ido rápido aunque el DNS no lo dé ahora.
+  const conocidas = [...recordados().keys()].filter((ip) => !esMalo(ip));
+  const sanas = conocidas.length ? conocidas : ips.filter((ip) => !esMalo(ip));
   return sanas.length ? sanas[Math.floor(Math.random() * sanas.length)] : null;
 }
 
@@ -131,23 +165,46 @@ function buscar(host, op, cb) {
 }
 
 // Sin keep-alive: una conexión reutilizada se saltaría la elección de servidor.
-const agente = new https.Agent({ keepAlive: false, lookup: buscar });
+const agente = new https.Agent({ keepAlive: false });
+const PLAZO_RESPUESTA = 5000; // ms para conectar y recibir las cabeceras
+
+const intento = ({ url, method, headers, signal }) =>
+  new Promise((ok, ko) => {
+    let ip;
+    const elegir = (host, op, cb) => buscar(host, op, (e, a, f) => ((ip = Array.isArray(a) ? a[0]?.address : a), cb(e, a, f)));
+    const req = https.request(url, { method, headers, signal, agent: agente, lookup: elegir }, (res) => {
+      res.socket.setTimeout(0); // a partir de aquí, de los parones se ocupa `vigilado`
+      const vacia = method === 'HEAD' || res.statusCode === 204 || res.statusCode === 304;
+      if (vacia) res.resume();
+      const h = new Headers();
+      for (const [k, v] of Object.entries(res.headers)) if (typeof v === 'string') h.set(k, v);
+      ok(Object.assign(new Response(vacia ? null : Readable.toWeb(res), { status: res.statusCode, headers: h }), { ip: res.socket.remoteAddress }));
+    });
+    // En el socket y no en la petición, que no cuenta el tiempo de conectar: una IP que ya no existe ni rechaza ni contesta.
+    req.on('socket', (s) => s.setTimeout(PLAZO_RESPUESTA, () => req.destroy(Object.assign(new Error('Microsoft no contesta'), { code: 'ETIMEDOUT' }))));
+    req.on('error', (e) => ko(Object.assign(e, { ip }))).end();
+  });
 
 /** Como fetch, pero eligiendo servidor y diciendo cuál ha sido en `ip`. Se sustituye en los tests. */
 export const red = {
-  pedir: ({ url, method, headers, signal }) =>
-    new Promise((ok, ko) => {
-      https
-        .request(url, { method, headers, signal, agent: agente }, (res) => {
-          const vacia = method === 'HEAD' || res.statusCode === 204 || res.statusCode === 304;
-          if (vacia) res.resume();
-          const h = new Headers();
-          for (const [k, v] of Object.entries(res.headers)) if (typeof v === 'string') h.set(k, v);
-          ok(Object.assign(new Response(vacia ? null : Readable.toWeb(res), { status: res.statusCode, headers: h }), { ip: res.socket.remoteAddress }));
-        })
-        .on('error', ko)
-        .end();
-    }),
+  // Un servidor recordado puede haber dejado de servir: si no contesta o falla, se descarta y se repite con otro.
+  pedir: async (p) => {
+    let r;
+    try {
+      r = await intento(p);
+    } catch (e) {
+      if (p.signal?.aborted || !e.ip) throw e;
+      console.log(`Servidor descartado, ${e.ip}: ${e.code ?? e.message}`);
+      aprender(e.ip, { lenta: true });
+      if (recordados().delete(e.ip)) guardarRecordados();
+      return intento(p);
+    }
+    if (r.status < 500 && r.status !== 421) return r;
+    console.log(`Servidor descartado, ${r.ip}: responde ${r.status}`);
+    aprender(r.ip, { lenta: true });
+    await r.body?.cancel();
+    return intento(p);
+  },
 };
 
 /**
@@ -156,14 +213,10 @@ export const red = {
  * abre otra desde el mismo byte. Lo lento se juzga solo por el tiempo esperando a
  * Microsoft: un reproductor que lee despacio porque no necesita más no dispara nada.
  *
- * Cada conexión a Microsoft es una lotería (la misma petición va a 20 MB/s o a 0,5),
- * así que una lenta no se cambia por otra a ciegas: se abren `carrera` a la vez y se
- * sigue con la que más haya traído.
- *
  * @param {Response & { ip?: string }} primera
  * @param {(rango: string) => Promise<Response & { ip?: string }>} abrir pide `rango` a Microsoft
  */
-export function vigilado(primera, abrir, desde, hasta, { minBps = 10e6, ventana = 2000, plazo = 15000, carrera = 3, signal } = {}) {
+export function vigilado(primera, abrir, desde, hasta, { minBps = 10e6, ventana = 2000, plazo = 15000, signal } = {}) {
   let lector = primera.body.getReader();
   let ip = primera.ip;
   let pos = desde;
@@ -172,70 +225,21 @@ export function vigilado(primera, abrir, desde, hasta, { minBps = 10e6, ventana 
   let inicioVentana = Date.now();
   let juicio = ventana;
   let seguidos = 0;
+  let anterior = 0; // bytes/s de esta conexión en la ventana anterior
 
-  /**
-   * Abre `n` conexiones desde `pos` y se queda con la que más ha traído cuando una llega
-   * a META_CARRERA o pasa TOPE_CARRERA. Lo que la ganadora ya ha leído se entrega primero.
-   */
-  const abrirMejor = async (n) => {
-    const rango = `bytes=${pos}-${hasta}`;
-    const cs = [];
-    const errores = [];
-    let parada = false;
-    let vencido = false;
-    let decidir;
-    const decidido = new Promise((ok) => (decidir = ok));
-    const una = async (yo) => {
-      const r = await abrir(rango);
-      if (r.status !== 206 || !r.headers.get('content-range')?.startsWith(`bytes ${pos}-`)) {
-        await r.body?.cancel();
-        throw new Error(`Microsoft responde ${r.status} a ${rango}`);
-      }
-      const c = { lector: r.body.getReader(), ip: r.ip, trozos: [], bytes: 0, yo };
-      cs.push(c);
-      if (parada) return void c.lector.cancel().catch(() => {});
-      // Una sola no compite con nadie; y pasado el tope, la primera que abra vale.
-      while (n > 1 && !vencido && !parada && c.bytes < META_CARRERA) {
-        const t = await c.lector.read();
-        if (t.done) break;
-        c.trozos.push(t.value);
-        c.bytes += t.value.length;
-      }
-      decidir();
-    };
-    const bucles = Array.from({ length: n }, () => {
-      const yo = {};
-      return (yo.bucle = una(yo).catch((e) => void errores.push(e)));
-    });
-    const tope = setTimeout(() => {
-      vencido = true;
-      if (cs.length) decidir();
-    }, TOPE_CARRERA);
-    await Promise.race([decidido, Promise.all(bucles)]);
-    clearTimeout(tope);
-    parada = true;
-    const mejor = [...cs].sort((a, b) => b.bytes - a.bytes)[0];
-    for (const c of cs) if (c !== mejor) c.lector.cancel().catch(() => {});
-    if (!mejor) throw errores[0] ?? new Error(`Microsoft no da datos a ${rango}`);
-    // Su bucle puede tener una lectura en el aire: hasta que acabe, no se lee del lector directamente.
-    let bucle = mejor.yo.bucle;
-    const leer = async () => {
-      if (mejor.trozos.length) return { done: false, value: mejor.trozos.shift() };
-      if (!bucle) return mejor.lector.read();
-      await bucle;
-      bucle = null;
-      return leer();
-    };
-    return { read: leer, cancel: (e) => mejor.lector.cancel(e), ip: mejor.ip };
-  };
-
-  const cambiar = async (motivo, n = 1) => {
+  const cambiar = async (motivo) => {
     if (++seguidos > 3) throw new Error(`Microsoft no da datos: ${motivo}`);
     console.log(`Cambio de conexión en el byte ${pos}, desde ${ip ?? '?'}: ${motivo}`);
     lector.cancel().catch(() => {});
-    lector = await abrirMejor(n);
-    ip = lector.ip;
-    espera = bytes = 0;
+    const rango = `bytes=${pos}-${hasta}`;
+    const r = await abrir(rango);
+    if (r.status !== 206 || !r.headers.get('content-range')?.startsWith(`bytes ${pos}-`)) {
+      await r.body?.cancel();
+      throw new Error(`Microsoft responde ${r.status} a ${rango}`);
+    }
+    lector = r.body.getReader();
+    ip = r.ip;
+    espera = bytes = anterior = 0;
     inicioVentana = Date.now();
   };
 
@@ -271,15 +275,19 @@ export function vigilado(primera, abrir, desde, hasta, { minBps = 10e6, ventana 
           bytes += r.value.length;
           seguidos = 0;
           if (minBps && espera >= juicio) {
-            const lenta = (bytes * 1000) / espera < minBps;
-            const mbs = ((bytes * 1000) / espera / 1e6).toFixed(1);
+            // Microsoft no arranca a tope: cada conexión acelera durante muchos segundos. Cambiar una que va
+            // a más es volver a empezar desde lo más lento, así que solo se cambia la que va mal y no mejora.
+            const bps = (bytes * 1000) / espera;
+            const lenta = bps < minBps && bps <= anterior * 1.1;
+            anterior = bps;
+            const mbs = (bps / 1e6).toFixed(1);
             // «Rápida» cuenta el tiempo real: si no, una lenta que apenas se espera lo parecería.
             aprender(ip, { lenta, rapida: (bytes * 1000) / (Date.now() - inicioVentana) >= minBps });
             espera = bytes = 0;
             inicioVentana = Date.now();
-            // Si todo va lento (hora punta, una línea modesta), se insiste menos, pero se insiste: la siguiente puede ser de las rápidas.
-            juicio = lenta ? Math.min(juicio * 2, 10000) : ventana;
-            if (lenta && pos <= hasta) await cambiar(`${mbs} MB/s`, carrera);
+            // Si todo va lento (hora punta, una línea modesta), no se insiste: cada vez se espera el doble.
+            juicio = lenta ? Math.min(juicio * 2, 60000) : ventana;
+            if (lenta && pos <= hasta) await cambiar(`${mbs} MB/s`);
           }
           return;
         }
