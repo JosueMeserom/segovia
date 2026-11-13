@@ -243,8 +243,36 @@ test('vigilado: una conexión lenta se cambia por otra desde el mismo byte', asy
   };
   const texto = await new Response(vigilado(primera, abrir, 0, 299, { minBps: 1e6, ventana: 30 })).text();
   assert.equal(texto.length, 300);
-  assert.equal(rangos.length, 1);
+  assert.deepEqual(rangos, Array(3).fill(rangos[0]), 'abre tres a la vez, las tres desde el mismo byte');
   assert.match(texto, /^x+y+$/);
+});
+
+test('vigilado: de las conexiones nuevas se queda con la más rápida, sin perder ni repetir bytes', async () => {
+  const total = 3e6;
+  const dato = (i) => String.fromCharCode(97 + (i % 26));
+  const trozos = (desde, tam) => Array.from({ length: Math.ceil((total - desde) / tam) }, (_, k) => Array.from({ length: Math.min(tam, total - desde - k * tam) }, (_, j) => dato(desde + k * tam + j)).join(''));
+  const resp = (desde, tam, pausa, ip) => Object.assign(new Response(cuerpoFalso(trozos(desde, tam), pausa), { status: 206, headers: { 'content-range': `bytes ${desde}-${total - 1}/${total}` } }), { ip });
+  let n = 0;
+  const cancelados = [];
+  const abrir = async (r) => {
+    const desde = Number(r.match(/=(\d+)/)[1]);
+    const k = n++;
+    if (k === 0) throw new Error('ECONNRESET'); // una que ni abre no estropea la carrera
+    const res = k === 1 ? resp(desde, 100, 5, 'lenta') : resp(desde, 300000, 1, 'rapida');
+    const lector = res.body.getReader.bind(res.body);
+    res.body.getReader = () => {
+      const l = lector();
+      const cancel = l.cancel.bind(l);
+      l.cancel = (e) => (cancelados.push(res.ip), cancel(e));
+      return l;
+    };
+    return res;
+  };
+  const texto = await new Response(vigilado(resp(0, 100, 5, 'primera'), abrir, 0, total - 1, { minBps: 1e6, ventana: 30 })).text();
+  assert.equal(texto.length, total);
+  for (const i of [0, 1, 4321, 999999, 1000000, 2345678, total - 1]) assert.equal(texto[i], dato(i), `byte ${i}`);
+  assert.equal(n, 3);
+  assert.deepEqual(cancelados, ['lenta'], 'la perdedora se cierra y la ganadora sigue');
 });
 
 test('vigilado: un reproductor que lee despacio no provoca cambios', async () => {

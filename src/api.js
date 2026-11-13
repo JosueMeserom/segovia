@@ -90,6 +90,8 @@ function enlace(id, drive, caducada) {
 // comprobando contra el nombre, así que elegir IP no abre ningún agujero.
 
 const MEMORIA = 10 * 60e3;
+const META_CARRERA = 1e6; // bytes con los que una conexión gana la carrera
+const TOPE_CARRERA = 1500; // ms que dura como mucho
 let bueno = null; // { ip, hasta }
 const malos = new Map(); // ip → hasta cuándo evitarla
 const publico = new Resolver();
@@ -154,10 +156,14 @@ export const red = {
  * abre otra desde el mismo byte. Lo lento se juzga solo por el tiempo esperando a
  * Microsoft: un reproductor que lee despacio porque no necesita más no dispara nada.
  *
+ * Cada conexión a Microsoft es una lotería (la misma petición va a 20 MB/s o a 0,5),
+ * así que una lenta no se cambia por otra a ciegas: se abren `carrera` a la vez y se
+ * sigue con la que más haya traído.
+ *
  * @param {Response & { ip?: string }} primera
  * @param {(rango: string) => Promise<Response & { ip?: string }>} abrir pide `rango` a Microsoft
  */
-export function vigilado(primera, abrir, desde, hasta, { minBps = 10e6, ventana = 2000, plazo = 15000, signal } = {}) {
+export function vigilado(primera, abrir, desde, hasta, { minBps = 10e6, ventana = 2000, plazo = 15000, carrera = 3, signal } = {}) {
   let lector = primera.body.getReader();
   let ip = primera.ip;
   let pos = desde;
@@ -167,18 +173,68 @@ export function vigilado(primera, abrir, desde, hasta, { minBps = 10e6, ventana 
   let juicio = ventana;
   let seguidos = 0;
 
-  const cambiar = async (motivo) => {
+  /**
+   * Abre `n` conexiones desde `pos` y se queda con la que más ha traído cuando una llega
+   * a META_CARRERA o pasa TOPE_CARRERA. Lo que la ganadora ya ha leído se entrega primero.
+   */
+  const abrirMejor = async (n) => {
+    const rango = `bytes=${pos}-${hasta}`;
+    const cs = [];
+    const errores = [];
+    let parada = false;
+    let vencido = false;
+    let decidir;
+    const decidido = new Promise((ok) => (decidir = ok));
+    const una = async (yo) => {
+      const r = await abrir(rango);
+      if (r.status !== 206 || !r.headers.get('content-range')?.startsWith(`bytes ${pos}-`)) {
+        await r.body?.cancel();
+        throw new Error(`Microsoft responde ${r.status} a ${rango}`);
+      }
+      const c = { lector: r.body.getReader(), ip: r.ip, trozos: [], bytes: 0, yo };
+      cs.push(c);
+      if (parada) return void c.lector.cancel().catch(() => {});
+      // Una sola no compite con nadie; y pasado el tope, la primera que abra vale.
+      while (n > 1 && !vencido && !parada && c.bytes < META_CARRERA) {
+        const t = await c.lector.read();
+        if (t.done) break;
+        c.trozos.push(t.value);
+        c.bytes += t.value.length;
+      }
+      decidir();
+    };
+    const bucles = Array.from({ length: n }, () => {
+      const yo = {};
+      return (yo.bucle = una(yo).catch((e) => void errores.push(e)));
+    });
+    const tope = setTimeout(() => {
+      vencido = true;
+      if (cs.length) decidir();
+    }, TOPE_CARRERA);
+    await Promise.race([decidido, Promise.all(bucles)]);
+    clearTimeout(tope);
+    parada = true;
+    const mejor = [...cs].sort((a, b) => b.bytes - a.bytes)[0];
+    for (const c of cs) if (c !== mejor) c.lector.cancel().catch(() => {});
+    if (!mejor) throw errores[0] ?? new Error(`Microsoft no da datos a ${rango}`);
+    // Su bucle puede tener una lectura en el aire: hasta que acabe, no se lee del lector directamente.
+    let bucle = mejor.yo.bucle;
+    const leer = async () => {
+      if (mejor.trozos.length) return { done: false, value: mejor.trozos.shift() };
+      if (!bucle) return mejor.lector.read();
+      await bucle;
+      bucle = null;
+      return leer();
+    };
+    return { read: leer, cancel: (e) => mejor.lector.cancel(e), ip: mejor.ip };
+  };
+
+  const cambiar = async (motivo, n = 1) => {
     if (++seguidos > 3) throw new Error(`Microsoft no da datos: ${motivo}`);
     console.log(`Cambio de conexión en el byte ${pos}, desde ${ip ?? '?'}: ${motivo}`);
     lector.cancel().catch(() => {});
-    const rango = `bytes=${pos}-${hasta}`;
-    const r = await abrir(rango);
-    if (r.status !== 206 || !r.headers.get('content-range')?.startsWith(`bytes ${pos}-`)) {
-      await r.body?.cancel();
-      throw new Error(`Microsoft responde ${r.status} a ${rango}`);
-    }
-    lector = r.body.getReader();
-    ip = r.ip;
+    lector = await abrirMejor(n);
+    ip = lector.ip;
     espera = bytes = 0;
     inicioVentana = Date.now();
   };
@@ -221,9 +277,9 @@ export function vigilado(primera, abrir, desde, hasta, { minBps = 10e6, ventana 
             aprender(ip, { lenta, rapida: (bytes * 1000) / (Date.now() - inicioVentana) >= minBps });
             espera = bytes = 0;
             inicioVentana = Date.now();
-            // Si todo va lento (hora punta, una línea modesta), no se insiste: cada vez se espera el doble.
-            juicio = lenta ? Math.min(juicio * 2, 60000) : ventana;
-            if (lenta && pos <= hasta) await cambiar(`${mbs} MB/s`);
+            // Si todo va lento (hora punta, una línea modesta), se insiste menos, pero se insiste: la siguiente puede ser de las rápidas.
+            juicio = lenta ? Math.min(juicio * 2, 10000) : ventana;
+            if (lenta && pos <= hasta) await cambiar(`${mbs} MB/s`, carrera);
           }
           return;
         }

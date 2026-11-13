@@ -160,7 +160,7 @@ Las claves van en `Authorization: Bearer …`, y todas las rutas son relativas a
 
 - Si la URL de Microsoft caduca, pide otra y repite el mismo rango.
 - Si la conexión se corta o se queda sin datos, sigue desde el mismo byte.
-- **Elige servidor de Microsoft.** Desde una misma casa medimos 90 MB/s hacia unos y 0,5 hacia otros, y el DNS reparte con rachas de un minuto entero hacia los lentos. Cada instancia recuerda cuál le ha ido bien y evita el que le ha ido mal. Si esperando a Microsoft llegan menos de `PROXY_MIN_MBS`, cambia de conexión; un reproductor que lee despacio porque no necesita más no dispara nada.
+- **Elige servidor de Microsoft.** Desde una misma casa medimos 90 MB/s hacia unos y 0,5 hacia otros, y el DNS reparte con rachas de un minuto entero hacia los lentos. Cada instancia recuerda cuál le ha ido bien y evita el que le ha ido mal. Si esperando a Microsoft llegan menos de `PROXY_MIN_MBS`, abre tres conexiones a la vez y sigue con la más rápida, porque incluso contra el mismo servidor unas van a 20 MB/s y otras a 0,5; un reproductor que lee despacio porque no necesita más no dispara nada.
 
 Nada de esto corre en el Worker, que no importa estos módulos: el token no sale del servidor.
 
