@@ -15,6 +15,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           # La misma que en producción (el mini-PC): el CI tiene que probar lo que corre.
-          node-version: 20
+          node-version: 26
       # Sin `npm ci`: no hay dependencias.
       - run: npm test
